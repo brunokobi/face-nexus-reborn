@@ -4,20 +4,35 @@ import { HomePage } from "@/components/pages/HomePage";
 import { ScannerPage } from "@/components/pages/ScannerPage";
 import { StudentsPage } from "@/components/pages/StudentsPage";
 import { ReportsPage } from "@/components/pages/ReportsPage";
+import { useStudentStore } from "@/hooks/use-student-store";
 
 const Index = () => {
   const [currentPage, setCurrentPage] = useState("home");
+  const { students, attendance, addStudent, updateStudent, removeStudent, addAttendanceRecord } = useStudentStore();
 
   const renderPage = () => {
     switch (currentPage) {
       case "home":
         return <HomePage onNavigate={setCurrentPage} />;
       case "scanner":
-        return <ScannerPage />;
+        return (
+          <ScannerPage
+            students={students}
+            attendance={attendance}
+            addAttendanceRecord={addAttendanceRecord}
+          />
+        );
       case "students":
-        return <StudentsPage />;
+        return (
+          <StudentsPage
+            students={students}
+            addStudent={addStudent}
+            updateStudent={updateStudent}
+            removeStudent={removeStudent}
+          />
+        );
       case "reports":
-        return <ReportsPage />;
+        return <ReportsPage students={students} attendance={attendance} />;
       case "settings":
         return <div className="p-8 text-center">Configurações em desenvolvimento...</div>;
       default:

@@ -1,118 +1,170 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import * as faceapi from "face-api.js";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Camera, StopCircle, User, Clock, CheckCircle, AlertCircle } from "lucide-react";
+import { Camera, StopCircle, User, Clock, CheckCircle, AlertCircle, Loader2, MapPin } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useFaceApi } from "@/hooks/use-face-api";
+import { useCamera } from "@/hooks/use-camera";
+import { LocationModal } from "@/components/scanner/LocationModal";
+import type { Student, AttendanceRecord } from "@/types/student";
 
-interface ScanResult {
-  id: string;
-  studentName: string;
-  studentId: string;
-  confidence: number;
-  timestamp: Date;
-  status: "success" | "warning" | "error";
+interface ScannerPageProps {
+  students: Student[];
+  attendance: AttendanceRecord[];
+  addAttendanceRecord: (record: AttendanceRecord) => void;
 }
 
-export function ScannerPage() {
+export function ScannerPage({ students, attendance, addAttendanceRecord }: ScannerPageProps) {
   const [isScanning, setIsScanning] = useState(false);
-  const [scanResults, setScanResults] = useState<ScanResult[]>([]);
+  const [showLocationModal, setShowLocationModal] = useState(false);
+  const [currentLocation, setCurrentLocation] = useState("");
+  const [sessionResults, setSessionResults] = useState<AttendanceRecord[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const detectionLoopRef = useRef<number | null>(null);
   const { toast } = useToast();
+  const { isLoaded, isLoading, loadError, createMatcher } = useFaceApi();
+  const { startCamera, stopCamera } = useCamera();
 
-  // Mock students data - in a real app, this would come from a database
-  const mockStudents = [
-    { id: "001", name: "Ana Silva" },
-    { id: "002", name: "Bruno Costa" },
-    { id: "003", name: "Carlos Santos" },
-    { id: "004", name: "Diana Oliveira" },
-    { id: "005", name: "Eduardo Lima" },
-  ];
+  // Track recognized IDs to avoid duplicates in this session
+  const recognizedInSessionRef = useRef<Set<string>>(new Set());
+
+  const cleanupDetection = useCallback(() => {
+    if (detectionLoopRef.current) {
+      cancelAnimationFrame(detectionLoopRef.current);
+      detectionLoopRef.current = null;
+    }
+    stopCamera();
+    if (videoRef.current) videoRef.current.srcObject = null;
+    if (overlayRef.current) {
+      const ctx = overlayRef.current.getContext("2d");
+      ctx?.clearRect(0, 0, overlayRef.current.width, overlayRef.current.height);
+    }
+  }, [stopCamera]);
 
   useEffect(() => {
-    if (isScanning && videoRef.current) {
-      startCamera();
-    } else if (!isScanning) {
-      stopCamera();
-    }
-
     return () => {
-      stopCamera();
+      cleanupDetection();
     };
-  }, [isScanning]);
+  }, [cleanupDetection]);
 
-  const startCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          facingMode: "user"
-        }
+  const handleRequestStart = () => {
+    const studentsWithFace = students.filter((s) => s.faceDescriptor);
+    if (studentsWithFace.length === 0) {
+      toast({
+        title: "Nenhum aluno cadastrado",
+        description: "Cadastre alunos com captura facial antes de iniciar o reconhecimento.",
+        variant: "destructive",
       });
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-        
-        // Start face detection simulation
-        simulateFaceDetection();
-      }
-    } catch (error) {
-      console.error("Erro ao acessar câmera:", error);
+      return;
+    }
+    setShowLocationModal(true);
+  };
+
+  const handleLocationConfirm = async (location: string) => {
+    setShowLocationModal(false);
+    setCurrentLocation(location);
+    recognizedInSessionRef.current = new Set();
+    setSessionResults([]);
+
+    if (!videoRef.current) return;
+
+    const ok = await startCamera(videoRef.current);
+    if (!ok) {
       toast({
         title: "Erro de Câmera",
         description: "Não foi possível acessar a câmera. Verifique as permissões.",
-        variant: "destructive"
+        variant: "destructive",
       });
-      setIsScanning(false);
+      return;
     }
+    setIsScanning(true);
+    startDetectionLoop(location);
   };
 
-  const stopCamera = () => {
-    if (videoRef.current?.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-    }
-  };
+  const startDetectionLoop = (location: string) => {
+    const matcher = createMatcher(students);
+    if (!matcher || !videoRef.current || !overlayRef.current) return;
 
-  // Simulate face detection and recognition
-  const simulateFaceDetection = () => {
-    const interval = setInterval(() => {
-      if (!isScanning) {
-        clearInterval(interval);
-        return;
+    const video = videoRef.current;
+    const overlay = overlayRef.current;
+
+    const detect = async () => {
+      if (!video || video.paused || video.ended) return;
+
+      overlay.width = video.videoWidth;
+      overlay.height = video.videoHeight;
+
+      const results = await faceapi
+        .detectAllFaces(video)
+        .withFaceLandmarks()
+        .withFaceDescriptors();
+
+      const ctx = overlay.getContext("2d")!;
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+      const dims = faceapi.matchDimensions(overlay, video, true);
+      const resized = faceapi.resizeResults(results, dims);
+
+      for (const detection of resized) {
+        const bestMatch = matcher.findBestMatch(detection.descriptor);
+        const box = detection.detection.box;
+        const isUnknown = bestMatch.label === "unknown";
+        const confidence = 1 - bestMatch.distance;
+        const student = students.find((s) => s.id === bestMatch.label);
+
+        // Draw box
+        ctx.strokeStyle = isUnknown ? "hsl(0, 84%, 60%)" : "hsl(142, 71%, 45%)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(box.x, box.y, box.width, box.height);
+
+        // Draw label
+        const label = isUnknown
+          ? "Desconhecido"
+          : `${student?.name || bestMatch.label} (${(confidence * 100).toFixed(0)}%)`;
+        ctx.fillStyle = isUnknown ? "hsl(0, 84%, 60%)" : "hsl(142, 71%, 45%)";
+        ctx.fillRect(box.x, box.y - 24, ctx.measureText(label).width + 16, 24);
+        ctx.fillStyle = "#fff";
+        ctx.font = "14px sans-serif";
+        ctx.fillText(label, box.x + 8, box.y - 7);
+
+        // Record attendance
+        if (!isUnknown && student && !recognizedInSessionRef.current.has(student.id)) {
+          recognizedInSessionRef.current.add(student.id);
+          const status = confidence > 0.7 ? "success" : confidence > 0.5 ? "warning" : "error";
+          const record: AttendanceRecord = {
+            id: crypto.randomUUID(),
+            studentId: student.id,
+            studentName: student.name,
+            timestamp: new Date(),
+            confidence,
+            location,
+            status,
+          };
+          addAttendanceRecord(record);
+          setSessionResults((prev) => [record, ...prev]);
+          toast({
+            title: "Aluno Reconhecido",
+            description: `${student.name} — ${(confidence * 100).toFixed(1)}% confiança — ${location}`,
+          });
+        }
       }
 
-      // Simulate random face detection
-      if (Math.random() > 0.7) {
-        const randomStudent = mockStudents[Math.floor(Math.random() * mockStudents.length)];
-        const confidence = 0.85 + Math.random() * 0.14; // 85-99% confidence
-        
-        const result: ScanResult = {
-          id: Date.now().toString(),
-          studentName: randomStudent.name,
-          studentId: randomStudent.id,
-          confidence,
-          timestamp: new Date(),
-          status: confidence > 0.9 ? "success" : confidence > 0.8 ? "warning" : "error"
-        };
+      detectionLoopRef.current = requestAnimationFrame(detect);
+    };
 
-        setScanResults(prev => [result, ...prev].slice(0, 10)); // Keep only last 10 results
-
-        toast({
-          title: `Aluno Reconhecido`,
-          description: `${randomStudent.name} - ${(confidence * 100).toFixed(1)}% de confiança`,
-          variant: result.status === "error" ? "destructive" : "default"
-        });
-      }
-    }, 3000); // Check every 3 seconds
+    // Wait for video to be ready
+    video.addEventListener("playing", () => {
+      detectionLoopRef.current = requestAnimationFrame(detect);
+    }, { once: true });
   };
 
-  const toggleScanning = () => {
-    setIsScanning(!isScanning);
+  const handleStop = () => {
+    setIsScanning(false);
+    cleanupDetection();
   };
 
   const getStatusColor = (status: string) => {
@@ -128,26 +180,29 @@ export function ScannerPage() {
     switch (status) {
       case "success": return CheckCircle;
       case "warning": return AlertCircle;
-      case "error": return AlertCircle;
-      default: return User;
+      default: return AlertCircle;
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-subtle p-4">
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header */}
         <div className="text-center space-y-4">
-          <h1 className="text-3xl lg:text-4xl font-bold">
-            Reconhecimento Facial
-          </h1>
+          <h1 className="text-3xl lg:text-4xl font-bold">Reconhecimento Facial</h1>
           <p className="text-muted-foreground text-lg">
-            Posicione-se em frente à câmera para registro de presença
+            {isScanning
+              ? `Escaneando em: ${currentLocation}`
+              : "Inicie o reconhecimento para registrar presenças"}
           </p>
+          {(isLoading || loadError) && (
+            <div className="flex items-center justify-center gap-2">
+              {isLoading && <><Loader2 className="h-5 w-5 animate-spin text-primary" /><span className="text-muted-foreground">Carregando modelos de IA...</span></>}
+              {loadError && <span className="text-destructive">{loadError}</span>}
+            </div>
+          )}
         </div>
 
         <div className="grid lg:grid-cols-3 gap-6">
-          {/* Camera Section */}
           <div className="lg:col-span-2">
             <Card className="shadow-card">
               <CardHeader>
@@ -156,38 +211,28 @@ export function ScannerPage() {
                   Câmera de Reconhecimento
                 </CardTitle>
                 <CardDescription>
-                  {isScanning ? "Câmera ativa - Aguardando reconhecimento..." : "Clique em iniciar para ativar a câmera"}
+                  {isScanning ? (
+                    <span className="flex items-center gap-1">
+                      <MapPin className="h-3 w-3" /> {currentLocation} — Detectando rostos em tempo real
+                    </span>
+                  ) : (
+                    "Clique em iniciar para configurar o local e ativar a câmera"
+                  )}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {/* Video Container */}
                 <div className="relative aspect-video bg-muted rounded-lg overflow-hidden">
-                  <video
-                    ref={videoRef}
-                    className="w-full h-full object-cover"
-                    autoPlay
-                    muted
-                    playsInline
-                  />
-                  <canvas
-                    ref={canvasRef}
-                    className="absolute inset-0 w-full h-full"
-                    style={{ display: 'none' }}
-                  />
-                  
-                  {/* Scanning Overlay */}
+                  <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />
+                  <canvas ref={overlayRef} className="absolute inset-0 w-full h-full" />
+
                   {isScanning && (
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-64 h-48 border-2 border-primary rounded-lg pulse-scan">
-                        <div className="absolute top-0 left-0 w-6 h-6 border-l-4 border-t-4 border-accent rounded-tl-lg"></div>
-                        <div className="absolute top-0 right-0 w-6 h-6 border-r-4 border-t-4 border-accent rounded-tr-lg"></div>
-                        <div className="absolute bottom-0 left-0 w-6 h-6 border-l-4 border-b-4 border-accent rounded-bl-lg"></div>
-                        <div className="absolute bottom-0 right-0 w-6 h-6 border-r-4 border-b-4 border-accent rounded-br-lg"></div>
-                      </div>
+                    <div className="absolute top-3 left-3">
+                      <Badge className="bg-destructive text-destructive-foreground animate-pulse">
+                        ● REC
+                      </Badge>
                     </div>
                   )}
 
-                  {/* Status Message */}
                   {!isScanning && (
                     <div className="absolute inset-0 flex items-center justify-center bg-muted/80">
                       <div className="text-center space-y-2">
@@ -198,34 +243,30 @@ export function ScannerPage() {
                   )}
                 </div>
 
-                {/* Controls */}
                 <div className="flex justify-center">
-                  <Button
-                    variant={isScanning ? "destructive" : "scan"}
-                    size="lg"
-                    onClick={toggleScanning}
-                    className="text-lg px-8 py-6"
-                  >
-                    {isScanning ? (
-                      <>
-                        <StopCircle className="h-5 w-5 mr-2" />
-                        Parar Escaneamento
-                      </>
-                    ) : (
-                      <>
-                        <Camera className="h-5 w-5 mr-2" />
-                        Iniciar Escaneamento
-                      </>
-                    )}
-                  </Button>
+                  {isScanning ? (
+                    <Button variant="destructive" size="lg" onClick={handleStop} className="text-lg px-8 py-6">
+                      <StopCircle className="h-5 w-5 mr-2" />
+                      Parar Escaneamento
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="scan"
+                      size="lg"
+                      onClick={handleRequestStart}
+                      disabled={!isLoaded || isLoading}
+                      className="text-lg px-8 py-6"
+                    >
+                      <Camera className="h-5 w-5 mr-2" />
+                      Iniciar Escaneamento
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Results Section */}
           <div className="space-y-6">
-            {/* Stats */}
             <Card className="shadow-card">
               <CardHeader>
                 <CardTitle className="text-lg">Estatísticas da Sessão</CardTitle>
@@ -233,36 +274,35 @@ export function ScannerPage() {
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-success">{scanResults.filter(r => r.status === "success").length}</div>
+                    <div className="text-2xl font-bold text-success">{sessionResults.filter((r) => r.status === "success").length}</div>
                     <div className="text-sm text-muted-foreground">Sucessos</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-warning">{scanResults.filter(r => r.status === "warning").length}</div>
+                    <div className="text-2xl font-bold text-warning">{sessionResults.filter((r) => r.status === "warning").length}</div>
                     <div className="text-sm text-muted-foreground">Avisos</div>
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-primary">{scanResults.length}</div>
+                  <div className="text-2xl font-bold text-primary">{sessionResults.length}</div>
                   <div className="text-sm text-muted-foreground">Total Reconhecidos</div>
                 </div>
               </CardContent>
             </Card>
 
-            {/* Recent Results */}
             <Card className="shadow-card">
               <CardHeader>
                 <CardTitle className="text-lg">Reconhecimentos Recentes</CardTitle>
-                <CardDescription>Últimos 10 resultados</CardDescription>
+                <CardDescription>Sessão atual</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3 max-h-96 overflow-y-auto">
-                  {scanResults.length === 0 ? (
+                  {sessionResults.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       <User className="h-12 w-12 mx-auto mb-2 opacity-50" />
                       <p>Nenhum reconhecimento ainda</p>
                     </div>
                   ) : (
-                    scanResults.map((result) => {
+                    sessionResults.map((result) => {
                       const StatusIcon = getStatusIcon(result.status);
                       return (
                         <div key={result.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
@@ -270,7 +310,9 @@ export function ScannerPage() {
                             <StatusIcon className="h-5 w-5 text-muted-foreground" />
                             <div>
                               <div className="font-medium">{result.studentName}</div>
-                              <div className="text-sm text-muted-foreground">ID: {result.studentId}</div>
+                              <div className="text-xs text-muted-foreground flex items-center gap-1">
+                                <MapPin className="h-3 w-3" /> {result.location}
+                              </div>
                             </div>
                           </div>
                           <div className="text-right space-y-1">
@@ -292,6 +334,12 @@ export function ScannerPage() {
           </div>
         </div>
       </div>
+
+      <LocationModal
+        open={showLocationModal}
+        onConfirm={handleLocationConfirm}
+        onCancel={() => setShowLocationModal(false)}
+      />
     </div>
   );
 }
