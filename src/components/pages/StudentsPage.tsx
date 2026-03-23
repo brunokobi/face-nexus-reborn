@@ -5,173 +5,106 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Plus, Search, Edit, Trash2, Camera, User } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Plus, Search, Edit, Trash2, User, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { WebcamCapture } from "@/components/scanner/WebcamCapture";
+import type { Student } from "@/types/student";
 
-interface Student {
-  id: string;
-  name: string;
-  email: string;
-  course: string;
-  registrationDate: Date;
-  avatar?: string;
-  presenceCount: number;
-  totalClasses: number;
+interface StudentsPageProps {
+  students: Student[];
+  addStudent: (student: Student) => void;
+  updateStudent: (id: string, data: Partial<Student>) => void;
+  removeStudent: (id: string) => void;
 }
 
-export function StudentsPage() {
-  const [students, setStudents] = useState<Student[]>([
-    {
-      id: "001",
-      name: "Ana Silva",
-      email: "ana.silva@email.com",
-      course: "Engenharia de Software",
-      registrationDate: new Date("2024-01-15"),
-      presenceCount: 18,
-      totalClasses: 20
-    },
-    {
-      id: "002",
-      name: "Bruno Costa",
-      email: "bruno.costa@email.com",
-      course: "Ciência da Computação",
-      registrationDate: new Date("2024-01-20"),
-      presenceCount: 19,
-      totalClasses: 20
-    },
-    {
-      id: "003",
-      name: "Carlos Santos",
-      email: "carlos.santos@email.com",
-      course: "Sistemas de Informação",
-      registrationDate: new Date("2024-02-01"),
-      presenceCount: 15,
-      totalClasses: 18
-    },
-    {
-      id: "004",
-      name: "Diana Oliveira",
-      email: "diana.oliveira@email.com",
-      course: "Engenharia de Software",
-      registrationDate: new Date("2024-01-10"),
-      presenceCount: 20,
-      totalClasses: 20
-    },
-    {
-      id: "005",
-      name: "Eduardo Lima",
-      email: "eduardo.lima@email.com",
-      course: "Ciência da Computação",
-      registrationDate: new Date("2024-01-25"),
-      presenceCount: 16,
-      totalClasses: 20
-    }
-  ]);
-
+export function StudentsPage({ students, addStudent, updateStudent, removeStudent }: StudentsPageProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
-  const [formData, setFormData] = useState({
-    name: "",
-    email: "",
-    course: ""
-  });
-
+  const [formData, setFormData] = useState({ name: "", email: "", course: "" });
+  const [capturedAvatar, setCapturedAvatar] = useState<string | null>(null);
+  const [capturedDescriptor, setCapturedDescriptor] = useState<Float32Array | null>(null);
   const { toast } = useToast();
 
-  const filteredStudents = students.filter(student =>
-    student.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    student.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    student.course.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredStudents = students.filter(
+    (s) =>
+      s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      s.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      s.course.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const handleAddStudent = () => {
     setEditingStudent(null);
     setFormData({ name: "", email: "", course: "" });
+    setCapturedAvatar(null);
+    setCapturedDescriptor(null);
     setIsDialogOpen(true);
   };
 
   const handleEditStudent = (student: Student) => {
     setEditingStudent(student);
-    setFormData({
-      name: student.name,
-      email: student.email,
-      course: student.course
-    });
+    setFormData({ name: student.name, email: student.email, course: student.course });
+    setCapturedAvatar(student.avatar || null);
+    setCapturedDescriptor(student.faceDescriptor || null);
     setIsDialogOpen(true);
   };
 
-  const handleDeleteStudent = (studentId: string) => {
-    setStudents(prev => prev.filter(s => s.id !== studentId));
-    toast({
-      title: "Aluno removido",
-      description: "O aluno foi removido com sucesso.",
-    });
+  const handleDeleteStudent = (id: string) => {
+    removeStudent(id);
+    toast({ title: "Aluno removido", description: "O aluno foi removido com sucesso." });
   };
 
   const handleSaveStudent = () => {
     if (!formData.name || !formData.email || !formData.course) {
-      toast({
-        title: "Campos obrigatórios",
-        description: "Por favor, preencha todos os campos.",
-        variant: "destructive"
-      });
+      toast({ title: "Campos obrigatórios", description: "Preencha todos os campos.", variant: "destructive" });
+      return;
+    }
+    if (!capturedDescriptor && !editingStudent?.faceDescriptor) {
+      toast({ title: "Foto obrigatória", description: "Capture a foto do aluno para extrair os dados faciais.", variant: "destructive" });
       return;
     }
 
     if (editingStudent) {
-      // Update existing student
-      setStudents(prev => prev.map(s => 
-        s.id === editingStudent.id 
-          ? { ...s, ...formData }
-          : s
-      ));
-      toast({
-        title: "Aluno atualizado",
-        description: "Os dados do aluno foram atualizados com sucesso.",
+      updateStudent(editingStudent.id, {
+        ...formData,
+        ...(capturedAvatar ? { avatar: capturedAvatar } : {}),
+        ...(capturedDescriptor ? { faceDescriptor: capturedDescriptor } : {}),
       });
+      toast({ title: "Aluno atualizado", description: "Dados atualizados com sucesso." });
     } else {
-      // Add new student
       const newStudent: Student = {
-        id: (students.length + 1).toString().padStart(3, '0'),
+        id: crypto.randomUUID(),
         ...formData,
         registrationDate: new Date(),
+        avatar: capturedAvatar || undefined,
+        faceDescriptor: capturedDescriptor || undefined,
         presenceCount: 0,
-        totalClasses: 0
+        totalClasses: 0,
       };
-      setStudents(prev => [...prev, newStudent]);
-      toast({
-        title: "Aluno adicionado",
-        description: "Novo aluno foi cadastrado com sucesso.",
-      });
+      addStudent(newStudent);
+      toast({ title: "Aluno cadastrado", description: "Novo aluno cadastrado com reconhecimento facial." });
     }
 
     setIsDialogOpen(false);
-    setFormData({ name: "", email: "", course: "" });
   };
 
-  const getAttendancePercentage = (student: Student) => {
-    if (student.totalClasses === 0) return 0;
-    return Math.round((student.presenceCount / student.totalClasses) * 100);
-  };
+  const getAttendancePercentage = (s: Student) =>
+    s.totalClasses === 0 ? 0 : Math.round((s.presenceCount / s.totalClasses) * 100);
 
-  const getAttendanceBadgeVariant = (percentage: number) => {
-    if (percentage >= 90) return "bg-success text-success-foreground";
-    if (percentage >= 75) return "bg-warning text-warning-foreground";
+  const getAttendanceBadgeVariant = (pct: number) => {
+    if (pct >= 90) return "bg-success text-success-foreground";
+    if (pct >= 75) return "bg-warning text-warning-foreground";
     return "bg-destructive text-destructive-foreground";
   };
 
   return (
     <div className="min-h-screen bg-gradient-subtle p-4">
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className="text-3xl lg:text-4xl font-bold">Gestão de Alunos</h1>
-            <p className="text-muted-foreground text-lg">
-              Cadastre e gerencie os alunos do sistema
-            </p>
+            <p className="text-muted-foreground text-lg">Cadastre e gerencie os alunos do sistema</p>
           </div>
           <Button variant="hero" onClick={handleAddStudent}>
             <Plus className="h-4 w-4 mr-2" />
@@ -179,22 +112,15 @@ export function StudentsPage() {
           </Button>
         </div>
 
-        {/* Search and Stats */}
         <div className="grid md:grid-cols-4 gap-4">
           <Card className="md:col-span-2 shadow-card">
             <CardContent className="pt-6">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Buscar alunos..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
+                <Input placeholder="Buscar alunos..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-10" />
               </div>
             </CardContent>
           </Card>
-
           <Card className="shadow-card">
             <CardContent className="pt-6">
               <div className="text-center">
@@ -203,12 +129,13 @@ export function StudentsPage() {
               </div>
             </CardContent>
           </Card>
-
           <Card className="shadow-card">
             <CardContent className="pt-6">
               <div className="text-center">
                 <div className="text-2xl font-bold text-success">
-                  {Math.round(students.reduce((acc, s) => acc + getAttendancePercentage(s), 0) / students.length || 0)}%
+                  {students.length > 0
+                    ? Math.round(students.reduce((a, s) => a + getAttendancePercentage(s), 0) / students.length)
+                    : 0}%
                 </div>
                 <div className="text-sm text-muted-foreground">Presença Média</div>
               </div>
@@ -216,12 +143,11 @@ export function StudentsPage() {
           </Card>
         </div>
 
-        {/* Students List */}
         <Card className="shadow-card">
           <CardHeader>
             <CardTitle>Lista de Alunos</CardTitle>
             <CardDescription>
-              {filteredStudents.length} aluno{filteredStudents.length !== 1 ? 's' : ''} encontrado{filteredStudents.length !== 1 ? 's' : ''}
+              {filteredStudents.length} aluno{filteredStudents.length !== 1 ? "s" : ""} encontrado{filteredStudents.length !== 1 ? "s" : ""}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -229,53 +155,43 @@ export function StudentsPage() {
               {filteredStudents.length === 0 ? (
                 <div className="text-center py-12">
                   <User className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
-                  <p className="text-muted-foreground">
-                    {searchTerm ? "Nenhum aluno encontrado" : "Nenhum aluno cadastrado"}
-                  </p>
+                  <p className="text-muted-foreground">{searchTerm ? "Nenhum aluno encontrado" : "Nenhum aluno cadastrado"}</p>
                 </div>
               ) : (
                 filteredStudents.map((student) => {
-                  const attendancePercentage = getAttendancePercentage(student);
+                  const pct = getAttendancePercentage(student);
                   return (
                     <div key={student.id} className="flex items-center justify-between p-4 bg-muted/30 rounded-lg hover:bg-muted/50 transition-colors">
                       <div className="flex items-center gap-4">
                         <Avatar className="h-12 w-12">
                           <AvatarImage src={student.avatar} />
                           <AvatarFallback className="bg-gradient-hero text-white font-semibold">
-                            {student.name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                            {student.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
                           </AvatarFallback>
                         </Avatar>
                         <div>
-                          <h3 className="font-semibold text-lg">{student.name}</h3>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-semibold text-lg">{student.name}</h3>
+                            {student.faceDescriptor && (
+                              <CheckCircle className="h-4 w-4 text-success" title="Face cadastrada" />
+                            )}
+                          </div>
                           <p className="text-muted-foreground">{student.email}</p>
                           <p className="text-sm text-muted-foreground">{student.course}</p>
                         </div>
                       </div>
-                      
                       <div className="flex items-center gap-4">
                         <div className="text-right">
-                          <Badge className={getAttendanceBadgeVariant(attendancePercentage)}>
-                            {attendancePercentage}% Presença
-                          </Badge>
+                          <Badge className={getAttendanceBadgeVariant(pct)}>{pct}% Presença</Badge>
                           <p className="text-sm text-muted-foreground mt-1">
                             {student.presenceCount}/{student.totalClasses} aulas
                           </p>
                         </div>
-                        
                         <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={() => handleEditStudent(student)}
-                          >
+                          <Button variant="outline" size="icon" onClick={() => handleEditStudent(student)}>
                             <Edit className="h-4 w-4" />
                           </Button>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={() => handleDeleteStudent(student.id)}
-                            className="text-destructive hover:text-destructive"
-                          >
+                          <Button variant="outline" size="icon" onClick={() => handleDeleteStudent(student.id)} className="text-destructive hover:text-destructive">
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
@@ -288,58 +204,46 @@ export function StudentsPage() {
           </CardContent>
         </Card>
 
-        {/* Add/Edit Student Dialog */}
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogContent>
+          <DialogContent className="sm:max-w-lg">
             <DialogHeader>
-              <DialogTitle>
-                {editingStudent ? "Editar Aluno" : "Novo Aluno"}
-              </DialogTitle>
+              <DialogTitle>{editingStudent ? "Editar Aluno" : "Novo Aluno"}</DialogTitle>
               <DialogDescription>
-                {editingStudent 
-                  ? "Atualize as informações do aluno" 
-                  : "Preencha os dados para cadastrar um novo aluno"
-                }
+                {editingStudent ? "Atualize as informações do aluno" : "Preencha os dados e capture a foto facial"}
               </DialogDescription>
             </DialogHeader>
-            
             <div className="space-y-4">
               <div>
                 <Label htmlFor="name">Nome Completo</Label>
-                <Input
-                  id="name"
-                  value={formData.name}
-                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                  placeholder="Digite o nome completo"
-                />
+                <Input id="name" value={formData.name} onChange={(e) => setFormData((p) => ({ ...p, name: e.target.value }))} placeholder="Digite o nome completo" />
               </div>
-              
               <div>
                 <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                  placeholder="Digite o email"
-                />
+                <Input id="email" type="email" value={formData.email} onChange={(e) => setFormData((p) => ({ ...p, email: e.target.value }))} placeholder="Digite o email" />
               </div>
-              
               <div>
                 <Label htmlFor="course">Curso</Label>
-                <Input
-                  id="course"
-                  value={formData.course}
-                  onChange={(e) => setFormData(prev => ({ ...prev, course: e.target.value }))}
-                  placeholder="Digite o nome do curso"
+                <Input id="course" value={formData.course} onChange={(e) => setFormData((p) => ({ ...p, course: e.target.value }))} placeholder="Digite o nome do curso" />
+              </div>
+              <div>
+                <Label>Captura Facial</Label>
+                <WebcamCapture
+                  onCapture={(img, desc) => {
+                    setCapturedAvatar(img);
+                    setCapturedDescriptor(desc);
+                  }}
+                  onError={(msg) => toast({ title: "Erro", description: msg, variant: "destructive" })}
                 />
+                {capturedDescriptor && (
+                  <p className="text-xs text-success mt-1 flex items-center gap-1">
+                    <CheckCircle className="h-3 w-3" />
+                    Descritores faciais extraídos com sucesso
+                  </p>
+                )}
               </div>
             </div>
-
             <DialogFooter>
-              <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-                Cancelar
-              </Button>
+              <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancelar</Button>
               <Button variant="hero" onClick={handleSaveStudent}>
                 {editingStudent ? "Atualizar" : "Cadastrar"}
               </Button>
