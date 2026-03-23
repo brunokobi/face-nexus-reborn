@@ -173,7 +173,7 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
                           <div className="flex items-center gap-2">
                             <h3 className="font-semibold text-lg">{student.name}</h3>
                             {student.faceDescriptor && (
-                              <CheckCircle className="h-4 w-4 text-success" title="Face cadastrada" />
+                              <CheckCircle className="h-4 w-4 text-success" />
                             )}
                           </div>
                           <p className="text-muted-foreground">{student.email}</p>
