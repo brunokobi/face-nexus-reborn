@@ -1,20 +1,27 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import * as faceapi from "face-api.js";
 import type { Student } from "@/types/student";
 
 const MODEL_URL = "/models";
+
+// Lazy-load face-api.js to avoid top-level import issues
+let faceapiModule: typeof import("face-api.js") | null = null;
+
+async function getFaceApi() {
+  if (!faceapiModule) {
+    faceapiModule = await import("face-api.js");
+  }
+  return faceapiModule;
+}
 
 export interface UseFaceApiReturn {
   isLoaded: boolean;
   isLoading: boolean;
   loadError: string | null;
-  detectFace: (
-    input: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement
-  ) => Promise<faceapi.WithFaceDescriptor<faceapi.WithFaceLandmarks<{ detection: faceapi.FaceDetection }>> | null>;
   detectAllFaces: (
     input: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement
-  ) => Promise<faceapi.WithFaceDescriptor<faceapi.WithFaceLandmarks<{ detection: faceapi.FaceDetection }>>[]>;
-  createMatcher: (students: Student[]) => faceapi.FaceMatcher | null;
+  ) => Promise<any[]>;
+  createMatcher: (students: Student[]) => any | null;
+  getFaceApiInstance: () => Promise<typeof import("face-api.js")>;
 }
 
 export function useFaceApi(): UseFaceApiReturn {
@@ -31,6 +38,7 @@ export function useFaceApi(): UseFaceApiReturn {
       setIsLoading(true);
       setLoadError(null);
       try {
+        const faceapi = await getFaceApi();
         await Promise.all([
           faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
           faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
@@ -50,21 +58,10 @@ export function useFaceApi(): UseFaceApiReturn {
     loadModels();
   }, []);
 
-  const detectFace = useCallback(
-    async (input: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement) => {
-      if (!isLoaded) return null;
-      const result = await faceapi
-        .detectSingleFace(input)
-        .withFaceLandmarks()
-        .withFaceDescriptor();
-      return result || null;
-    },
-    [isLoaded]
-  );
-
   const detectAllFaces = useCallback(
     async (input: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement) => {
       if (!isLoaded) return [];
+      const faceapi = await getFaceApi();
       const results = await faceapi
         .detectAllFaces(input)
         .withFaceLandmarks()
@@ -75,7 +72,9 @@ export function useFaceApi(): UseFaceApiReturn {
   );
 
   const createMatcher = useCallback(
-    (students: Student[]): faceapi.FaceMatcher | null => {
+    (students: Student[]) => {
+      if (!faceapiModule) return null;
+      const faceapi = faceapiModule;
       const labeled = students
         .filter((s) => s.faceDescriptor)
         .map(
@@ -88,5 +87,5 @@ export function useFaceApi(): UseFaceApiReturn {
     []
   );
 
-  return { isLoaded, isLoading, loadError, detectFace, detectAllFaces, createMatcher };
+  return { isLoaded, isLoading, loadError, detectAllFaces, createMatcher, getFaceApiInstance: getFaceApi };
 }
