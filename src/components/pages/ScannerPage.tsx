@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import * as faceapi from "face-api.js";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -22,17 +21,16 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
   const [currentLocation, setCurrentLocation] = useState("");
   const [sessionResults, setSessionResults] = useState<AttendanceRecord[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const detectionLoopRef = useRef<number | null>(null);
+  const isScanningRef = useRef(false);
   const { toast } = useToast();
-  const { isLoaded, isLoading, loadError, createMatcher } = useFaceApi();
+  const { isLoaded, isLoading, loadError, createMatcher, getFaceApiInstance } = useFaceApi();
   const { startCamera, stopCamera } = useCamera();
-
-  // Track recognized IDs to avoid duplicates in this session
   const recognizedInSessionRef = useRef<Set<string>>(new Set());
 
   const cleanupDetection = useCallback(() => {
+    isScanningRef.current = false;
     if (detectionLoopRef.current) {
       cancelAnimationFrame(detectionLoopRef.current);
       detectionLoopRef.current = null;
@@ -46,9 +44,7 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
   }, [stopCamera]);
 
   useEffect(() => {
-    return () => {
-      cleanupDetection();
-    };
+    return () => { cleanupDetection(); };
   }, [cleanupDetection]);
 
   const handleRequestStart = () => {
@@ -71,95 +67,91 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
     setSessionResults([]);
 
     if (!videoRef.current) return;
-
     const ok = await startCamera(videoRef.current);
     if (!ok) {
-      toast({
-        title: "Erro de Câmera",
-        description: "Não foi possível acessar a câmera. Verifique as permissões.",
-        variant: "destructive",
-      });
+      toast({ title: "Erro de Câmera", description: "Não foi possível acessar a câmera.", variant: "destructive" });
       return;
     }
     setIsScanning(true);
+    isScanningRef.current = true;
     startDetectionLoop(location);
   };
 
-  const startDetectionLoop = (location: string) => {
+  const startDetectionLoop = async (location: string) => {
     const matcher = createMatcher(students);
     if (!matcher || !videoRef.current || !overlayRef.current) return;
 
+    const faceapi = await getFaceApiInstance();
     const video = videoRef.current;
     const overlay = overlayRef.current;
 
     const detect = async () => {
-      if (!video || video.paused || video.ended) return;
+      if (!isScanningRef.current || !video || video.paused || video.ended) return;
 
-      overlay.width = video.videoWidth;
-      overlay.height = video.videoHeight;
+      try {
+        overlay.width = video.videoWidth || 640;
+        overlay.height = video.videoHeight || 480;
 
-      const results = await faceapi
-        .detectAllFaces(video)
-        .withFaceLandmarks()
-        .withFaceDescriptors();
+        const results = await faceapi.detectAllFaces(video).withFaceLandmarks().withFaceDescriptors();
+        const ctx = overlay.getContext("2d")!;
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
 
-      const ctx = overlay.getContext("2d")!;
-      ctx.clearRect(0, 0, overlay.width, overlay.height);
+        const dims = faceapi.matchDimensions(overlay, video, true);
+        const resized = faceapi.resizeResults(results, dims);
 
-      const dims = faceapi.matchDimensions(overlay, video, true);
-      const resized = faceapi.resizeResults(results, dims);
+        for (const detection of resized) {
+          const bestMatch = matcher.findBestMatch(detection.descriptor);
+          const box = detection.detection.box;
+          const isUnknown = bestMatch.label === "unknown";
+          const confidence = 1 - bestMatch.distance;
+          const student = students.find((s) => s.id === bestMatch.label);
 
-      for (const detection of resized) {
-        const bestMatch = matcher.findBestMatch(detection.descriptor);
-        const box = detection.detection.box;
-        const isUnknown = bestMatch.label === "unknown";
-        const confidence = 1 - bestMatch.distance;
-        const student = students.find((s) => s.id === bestMatch.label);
+          ctx.strokeStyle = isUnknown ? "hsl(0, 84%, 60%)" : "hsl(142, 71%, 45%)";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(box.x, box.y, box.width, box.height);
 
-        // Draw box
-        ctx.strokeStyle = isUnknown ? "hsl(0, 84%, 60%)" : "hsl(142, 71%, 45%)";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(box.x, box.y, box.width, box.height);
+          const label = isUnknown ? "Desconhecido" : `${student?.name || bestMatch.label} (${(confidence * 100).toFixed(0)}%)`;
+          ctx.fillStyle = isUnknown ? "hsl(0, 84%, 60%)" : "hsl(142, 71%, 45%)";
+          const textWidth = ctx.measureText(label).width;
+          ctx.fillRect(box.x, box.y - 24, textWidth + 16, 24);
+          ctx.fillStyle = "#fff";
+          ctx.font = "14px sans-serif";
+          ctx.fillText(label, box.x + 8, box.y - 7);
 
-        // Draw label
-        const label = isUnknown
-          ? "Desconhecido"
-          : `${student?.name || bestMatch.label} (${(confidence * 100).toFixed(0)}%)`;
-        ctx.fillStyle = isUnknown ? "hsl(0, 84%, 60%)" : "hsl(142, 71%, 45%)";
-        ctx.fillRect(box.x, box.y - 24, ctx.measureText(label).width + 16, 24);
-        ctx.fillStyle = "#fff";
-        ctx.font = "14px sans-serif";
-        ctx.fillText(label, box.x + 8, box.y - 7);
-
-        // Record attendance
-        if (!isUnknown && student && !recognizedInSessionRef.current.has(student.id)) {
-          recognizedInSessionRef.current.add(student.id);
-          const status = confidence > 0.7 ? "success" : confidence > 0.5 ? "warning" : "error";
-          const record: AttendanceRecord = {
-            id: crypto.randomUUID(),
-            studentId: student.id,
-            studentName: student.name,
-            timestamp: new Date(),
-            confidence,
-            location,
-            status,
-          };
-          addAttendanceRecord(record);
-          setSessionResults((prev) => [record, ...prev]);
-          toast({
-            title: "Aluno Reconhecido",
-            description: `${student.name} — ${(confidence * 100).toFixed(1)}% confiança — ${location}`,
-          });
+          if (!isUnknown && student && !recognizedInSessionRef.current.has(student.id)) {
+            recognizedInSessionRef.current.add(student.id);
+            const status = confidence > 0.7 ? "success" : confidence > 0.5 ? "warning" : "error";
+            const record: AttendanceRecord = {
+              id: crypto.randomUUID(),
+              studentId: student.id,
+              studentName: student.name,
+              timestamp: new Date(),
+              confidence,
+              location,
+              status: status as "success" | "warning" | "error",
+            };
+            addAttendanceRecord(record);
+            setSessionResults((prev) => [record, ...prev]);
+            toast({ title: "Aluno Reconhecido", description: `${student.name} — ${(confidence * 100).toFixed(1)}% — ${location}` });
+          }
         }
+      } catch (err) {
+        console.error("Detection error:", err);
       }
 
-      detectionLoopRef.current = requestAnimationFrame(detect);
+      if (isScanningRef.current) {
+        detectionLoopRef.current = requestAnimationFrame(detect);
+      }
     };
 
     // Wait for video to be ready
-    video.addEventListener("playing", () => {
+    if (video.readyState >= 2) {
       detectionLoopRef.current = requestAnimationFrame(detect);
-    }, { once: true });
+    } else {
+      video.addEventListener("playing", () => {
+        detectionLoopRef.current = requestAnimationFrame(detect);
+      }, { once: true });
+    }
   };
 
   const handleStop = () => {
@@ -190,9 +182,7 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
         <div className="text-center space-y-4">
           <h1 className="text-3xl lg:text-4xl font-bold">Reconhecimento Facial</h1>
           <p className="text-muted-foreground text-lg">
-            {isScanning
-              ? `Escaneando em: ${currentLocation}`
-              : "Inicie o reconhecimento para registrar presenças"}
+            {isScanning ? `Escaneando em: ${currentLocation}` : "Inicie o reconhecimento para registrar presenças"}
           </p>
           {(isLoading || loadError) && (
             <div className="flex items-center justify-center gap-2">
@@ -206,33 +196,22 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
           <div className="lg:col-span-2">
             <Card className="shadow-card">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Camera className="h-5 w-5" />
-                  Câmera de Reconhecimento
-                </CardTitle>
+                <CardTitle className="flex items-center gap-2"><Camera className="h-5 w-5" /> Câmera de Reconhecimento</CardTitle>
                 <CardDescription>
                   {isScanning ? (
-                    <span className="flex items-center gap-1">
-                      <MapPin className="h-3 w-3" /> {currentLocation} — Detectando rostos em tempo real
-                    </span>
-                  ) : (
-                    "Clique em iniciar para configurar o local e ativar a câmera"
-                  )}
+                    <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {currentLocation} — Detectando rostos em tempo real</span>
+                  ) : "Clique em iniciar para configurar o local e ativar a câmera"}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="relative aspect-video bg-muted rounded-lg overflow-hidden">
                   <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />
                   <canvas ref={overlayRef} className="absolute inset-0 w-full h-full" />
-
                   {isScanning && (
                     <div className="absolute top-3 left-3">
-                      <Badge className="bg-destructive text-destructive-foreground animate-pulse">
-                        ● REC
-                      </Badge>
+                      <Badge className="bg-destructive text-destructive-foreground animate-pulse">● REC</Badge>
                     </div>
                   )}
-
                   {!isScanning && (
                     <div className="absolute inset-0 flex items-center justify-center bg-muted/80">
                       <div className="text-center space-y-2">
@@ -242,23 +221,14 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
                     </div>
                   )}
                 </div>
-
                 <div className="flex justify-center">
                   {isScanning ? (
                     <Button variant="destructive" size="lg" onClick={handleStop} className="text-lg px-8 py-6">
-                      <StopCircle className="h-5 w-5 mr-2" />
-                      Parar Escaneamento
+                      <StopCircle className="h-5 w-5 mr-2" /> Parar Escaneamento
                     </Button>
                   ) : (
-                    <Button
-                      variant="scan"
-                      size="lg"
-                      onClick={handleRequestStart}
-                      disabled={!isLoaded || isLoading}
-                      className="text-lg px-8 py-6"
-                    >
-                      <Camera className="h-5 w-5 mr-2" />
-                      Iniciar Escaneamento
+                    <Button variant="scan" size="lg" onClick={handleRequestStart} disabled={!isLoaded || isLoading} className="text-lg px-8 py-6">
+                      <Camera className="h-5 w-5 mr-2" /> Iniciar Escaneamento
                     </Button>
                   )}
                 </div>
@@ -268,9 +238,7 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
 
           <div className="space-y-6">
             <Card className="shadow-card">
-              <CardHeader>
-                <CardTitle className="text-lg">Estatísticas da Sessão</CardTitle>
-              </CardHeader>
+              <CardHeader><CardTitle className="text-lg">Estatísticas da Sessão</CardTitle></CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="text-center">
@@ -310,19 +278,12 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
                             <StatusIcon className="h-5 w-5 text-muted-foreground" />
                             <div>
                               <div className="font-medium">{result.studentName}</div>
-                              <div className="text-xs text-muted-foreground flex items-center gap-1">
-                                <MapPin className="h-3 w-3" /> {result.location}
-                              </div>
+                              <div className="text-xs text-muted-foreground flex items-center gap-1"><MapPin className="h-3 w-3" /> {result.location}</div>
                             </div>
                           </div>
                           <div className="text-right space-y-1">
-                            <Badge className={getStatusColor(result.status)}>
-                              {(result.confidence * 100).toFixed(1)}%
-                            </Badge>
-                            <div className="text-xs text-muted-foreground flex items-center gap-1">
-                              <Clock className="h-3 w-3" />
-                              {result.timestamp.toLocaleTimeString()}
-                            </div>
+                            <Badge className={getStatusColor(result.status)}>{(result.confidence * 100).toFixed(1)}%</Badge>
+                            <div className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" />{result.timestamp.toLocaleTimeString()}</div>
                           </div>
                         </div>
                       );
@@ -334,12 +295,7 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
           </div>
         </div>
       </div>
-
-      <LocationModal
-        open={showLocationModal}
-        onConfirm={handleLocationConfirm}
-        onCancel={() => setShowLocationModal(false)}
-      />
+      <LocationModal open={showLocationModal} onConfirm={handleLocationConfirm} onCancel={() => setShowLocationModal(false)} />
     </div>
   );
 }

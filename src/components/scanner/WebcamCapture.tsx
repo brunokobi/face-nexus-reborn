@@ -13,7 +13,7 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { startCamera, stopCamera } = useCamera();
-  const { isLoaded, isLoading, loadError, detectFace, detectAllFaces } = useFaceApi();
+  const { isLoaded, isLoading, loadError, detectAllFaces } = useFaceApi();
   const [cameraActive, setCameraActive] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
@@ -45,7 +45,6 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
     setError(null);
 
     try {
-      // Check for multiple faces
       const allFaces = await detectAllFaces(videoRef.current);
       if (allFaces.length === 0) {
         setError("Nenhum rosto detectado. Posicione-se melhor em frente à câmera.");
@@ -61,7 +60,6 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
       const detection = allFaces[0];
       const descriptor = detection.descriptor;
 
-      // Capture image to canvas
       const canvas = canvasRef.current;
       canvas.width = videoRef.current.videoWidth;
       canvas.height = videoRef.current.videoHeight;
@@ -112,13 +110,7 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
           <img src={capturedImage} alt="Foto capturada" className="w-full h-full object-cover" />
         ) : (
           <>
-            <video
-              ref={videoRef}
-              className="w-full h-full object-cover"
-              autoPlay
-              muted
-              playsInline
-            />
+            <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />
             {!cameraActive && (
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-muted/80 gap-2">
                 <Camera className="h-10 w-10 text-muted-foreground" />
@@ -149,22 +141,11 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
             Tirar Novamente
           </Button>
         ) : cameraActive ? (
-          <Button
-            variant="hero"
-            onClick={handleCapture}
-            disabled={processing || !isLoaded}
-            size="sm"
-          >
+          <Button variant="hero" onClick={handleCapture} disabled={processing || !isLoaded} size="sm">
             {processing ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                Processando...
-              </>
+              <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Processando...</>
             ) : (
-              <>
-                <Camera className="h-4 w-4 mr-1" />
-                Capturar Foto
-              </>
+              <><Camera className="h-4 w-4 mr-1" />Capturar Foto</>
             )}
           </Button>
         ) : (
