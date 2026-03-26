@@ -45,8 +45,6 @@ export function ReportsPage({ students, attendance }: ReportsPageProps) {
     const d = new Date();
     d.setDate(d.getDate() - i);
     const ds = d.toDateString();
-    const dayRecords = attendance.filter((r) => new Date(r.timestamp).toDateString() === ds);
-    const uniqueStudents = new Set(dayRecords.filter((r) => r.status === "success").map((r) => r.studentId));
     const presentStudentIds = attendanceByDate[ds] || [];
     const uniqueStudents = new Set(presentStudentIds);
     last7Days.push({
