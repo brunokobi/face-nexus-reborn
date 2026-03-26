@@ -4,6 +4,7 @@ import { HomePage } from "@/components/pages/HomePage";
 import { ScannerPage } from "@/components/pages/ScannerPage";
 import { StudentsPage } from "@/components/pages/StudentsPage";
 import { ReportsPage } from "@/components/pages/ReportsPage";
+import { SettingsUsersPage } from "@/components/pages/SettingsUsersPage";
 import { useStudentStore } from "@/hooks/use-student-store";
 
 const Index = () => {
@@ -34,7 +35,7 @@ const Index = () => {
       case "reports":
         return <ReportsPage students={students} attendance={attendance} />;
       case "settings":
-        return <div className="p-8 text-center">Configurações em desenvolvimento...</div>;
+        return <SettingsUsersPage />;
       default:
         return <HomePage onNavigate={setCurrentPage} />;
     }
