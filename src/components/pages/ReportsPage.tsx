@@ -26,6 +26,20 @@ export function ReportsPage({ students, attendance }: ReportsPageProps) {
   ).length;
 
   // Group attendance by date (last 7 days)
+  // Group attendance by date string for efficient lookup
+  const attendanceByDate = attendance.reduce((acc, record) => {
+    const dateStr = new Date(record.timestamp).toDateString();
+    if (!acc[dateStr]) {
+      acc[dateStr] = [];
+    }
+    // Add only successful records to avoid filtering later
+    if (record.status === 'success') {
+      acc[dateStr].push(record.studentId);
+    }
+    return acc;
+  }, {} as Record<string, string[]>);
+
+  // Calculate stats for the last 7 days
   const last7Days: { date: string; present: number; total: number; percentage: number }[] = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date();
@@ -33,6 +47,8 @@ export function ReportsPage({ students, attendance }: ReportsPageProps) {
     const ds = d.toDateString();
     const dayRecords = attendance.filter((r) => new Date(r.timestamp).toDateString() === ds);
     const uniqueStudents = new Set(dayRecords.filter((r) => r.status === "success").map((r) => r.studentId));
+    const presentStudentIds = attendanceByDate[ds] || [];
+    const uniqueStudents = new Set(presentStudentIds);
     last7Days.push({
       date: d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }),
       present: uniqueStudents.size,

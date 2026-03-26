@@ -2,7 +2,7 @@ import { useRef, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Camera, RotateCcw, Loader2, AlertCircle } from "lucide-react";
 import { useCamera } from "@/hooks/use-camera";
-import { useFaceApi } from "@/hooks/use-face-api";
+import { useMediaPipe } from "@/hooks/use-mediapipe";
 
 interface WebcamCaptureProps {
   onCapture: (imageBase64: string, descriptor: Float32Array) => void;
@@ -11,9 +11,8 @@ interface WebcamCaptureProps {
 
 export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const { startCamera, stopCamera } = useCamera();
-  const { isLoaded, isLoading, loadError, detectAllFaces } = useFaceApi();
+  const { isLoaded, isLoading, loadError, captureDescriptor } = useMediaPipe();
   const [cameraActive, setCameraActive] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
@@ -30,7 +29,8 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
     setError(null);
     const ok = await startCamera(videoRef.current);
     if (!ok) {
-      const msg = "Não foi possível acessar a câmera. Verifique as permissões do navegador.";
+      const msg =
+        "Não foi possível acessar a câmera. Verifique as permissões do navegador.";
       setError(msg);
       onError?.(msg);
       return;
@@ -40,40 +40,29 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
   };
 
   const handleCapture = async () => {
-    if (!videoRef.current || !canvasRef.current) return;
+    if (!videoRef.current) return;
     setProcessing(true);
     setError(null);
 
     try {
-      const allFaces = await detectAllFaces(videoRef.current);
-      if (allFaces.length === 0) {
-        setError("Nenhum rosto detectado. Posicione-se melhor em frente à câmera.");
-        setProcessing(false);
-        return;
-      }
-      if (allFaces.length > 1) {
-        setError("Mais de um rosto detectado. Apenas uma pessoa deve estar em frente à câmera.");
-        setProcessing(false);
-        return;
-      }
-
-      const detection = allFaces[0];
-      const descriptor = detection.descriptor;
-
-      const canvas = canvasRef.current;
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(videoRef.current, 0, 0);
-      const imageBase64 = canvas.toDataURL("image/jpeg", 0.8);
-
+      const result = await captureDescriptor(videoRef.current);
       stopCamera();
       setCameraActive(false);
-      setCapturedImage(imageBase64);
-      onCapture(imageBase64, descriptor);
-    } catch (err) {
-      console.error("Face detection error:", err);
-      setError("Erro ao processar rosto. Tente novamente.");
+      setCapturedImage(result.imageBase64);
+      onCapture(result.imageBase64, result.descriptor);
+    } catch (err: any) {
+      if (err?.message === "NO_FACE") {
+        setError(
+          "Nenhum rosto detectado. Posicione-se melhor em frente à câmera."
+        );
+      } else if (err?.message === "MULTIPLE_FACES") {
+        setError(
+          "Mais de um rosto detectado. Apenas uma pessoa deve estar em frente à câmera."
+        );
+      } else {
+        console.error("Erro de captura:", err);
+        setError("Erro ao processar rosto. Tente novamente.");
+      }
     } finally {
       setProcessing(false);
     }
@@ -107,10 +96,20 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
     <div className="space-y-3">
       <div className="relative aspect-[4/3] bg-muted rounded-lg overflow-hidden">
         {capturedImage ? (
-          <img src={capturedImage} alt="Foto capturada" className="w-full h-full object-cover" />
+          <img
+            src={capturedImage}
+            alt="Foto capturada"
+            className="w-full h-full object-cover"
+          />
         ) : (
           <>
-            <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />
+            <video
+              ref={videoRef}
+              className="w-full h-full object-cover"
+              autoPlay
+              muted
+              playsInline
+            />
             {!cameraActive && (
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-muted/80 gap-2">
                 <Camera className="h-10 w-10 text-muted-foreground" />
@@ -124,7 +123,6 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
             )}
           </>
         )}
-        <canvas ref={canvasRef} className="hidden" />
       </div>
 
       {error && (
@@ -141,15 +139,31 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
             Tirar Novamente
           </Button>
         ) : cameraActive ? (
-          <Button variant="hero" onClick={handleCapture} disabled={processing || !isLoaded} size="sm">
+          <Button
+            variant="hero"
+            onClick={handleCapture}
+            disabled={processing || !isLoaded}
+            size="sm"
+          >
             {processing ? (
-              <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Processando...</>
+              <>
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                Processando...
+              </>
             ) : (
-              <><Camera className="h-4 w-4 mr-1" />Capturar Foto</>
+              <>
+                <Camera className="h-4 w-4 mr-1" />
+                Capturar Foto
+              </>
             )}
           </Button>
         ) : (
-          <Button variant="outline" onClick={handleStartCamera} disabled={!isLoaded} size="sm">
+          <Button
+            variant="outline"
+            onClick={handleStartCamera}
+            disabled={!isLoaded}
+            size="sm"
+          >
             <Camera className="h-4 w-4 mr-1" />
             Abrir Câmera
           </Button>

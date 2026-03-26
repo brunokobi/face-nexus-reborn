@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Camera, StopCircle, User, Clock, CheckCircle, AlertCircle, Loader2, MapPin } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useFaceApi } from "@/hooks/use-face-api";
+import { useMediaPipe } from "@/hooks/use-mediapipe";
 import { useCamera } from "@/hooks/use-camera";
 import { LocationModal } from "@/components/scanner/LocationModal";
 import type { Student, AttendanceRecord } from "@/types/student";
@@ -25,7 +25,7 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
   const detectionLoopRef = useRef<number | null>(null);
   const isScanningRef = useRef(false);
   const { toast } = useToast();
-  const { isLoaded, isLoading, loadError, createMatcher, getFaceApiInstance } = useFaceApi();
+  const { isLoaded, isLoading, loadError, detectFaces, createMatcher } = useMediaPipe();
   const { startCamera, stopCamera } = useCamera();
   const recognizedInSessionRef = useRef<Set<string>>(new Set());
 
@@ -77,11 +77,10 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
     startDetectionLoop(location);
   };
 
-  const startDetectionLoop = async (location: string) => {
+  const startDetectionLoop = (location: string) => {
     const matcher = createMatcher(students);
     if (!matcher || !videoRef.current || !overlayRef.current) return;
 
-    const faceapi = await getFaceApiInstance();
     const video = videoRef.current;
     const overlay = overlayRef.current;
 
@@ -89,35 +88,47 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
       if (!isScanningRef.current || !video || video.paused || video.ended) return;
 
       try {
-        overlay.width = video.videoWidth || 640;
-        overlay.height = video.videoHeight || 480;
+        const vw = video.videoWidth || 640;
+        const vh = video.videoHeight || 480;
+        overlay.width = vw;
+        overlay.height = vh;
 
-        const results = await faceapi.detectAllFaces(video).withFaceLandmarks().withFaceDescriptors();
+        const results = await detectFaces(video);
         const ctx = overlay.getContext("2d")!;
-        ctx.clearRect(0, 0, overlay.width, overlay.height);
+        ctx.clearRect(0, 0, vw, vh);
 
-        const dims = faceapi.matchDimensions(overlay, video, true);
-        const resized = faceapi.resizeResults(results, dims);
-
-        for (const detection of resized) {
-          const bestMatch = matcher.findBestMatch(detection.descriptor);
-          const box = detection.detection.box;
+        for (const detection of results) {
+          const { box, descriptor } = detection;
+          const bestMatch = matcher.findBestMatch(descriptor);
           const isUnknown = bestMatch.label === "unknown";
-          const confidence = 1 - bestMatch.distance;
+
+          // Converter coordenadas normalizadas (0-1) para pixels
+          const px = box.x * vw;
+          const py = box.y * vh;
+          const pw = box.width * vw;
+          const ph = box.height * vh;
+
+          // Confiança: distance 0 = 100%, threshold 0.25 = 0%
+          const confidence = Math.max(0, Math.min(1, 1 - bestMatch.distance / 0.25));
           const student = students.find((s) => s.id === bestMatch.label);
 
+          // Bounding box
           ctx.strokeStyle = isUnknown ? "hsl(0, 84%, 60%)" : "hsl(142, 71%, 45%)";
           ctx.lineWidth = 2;
-          ctx.strokeRect(box.x, box.y, box.width, box.height);
+          ctx.strokeRect(px, py, pw, ph);
 
-          const label = isUnknown ? "Desconhecido" : `${student?.name || bestMatch.label} (${(confidence * 100).toFixed(0)}%)`;
-          ctx.fillStyle = isUnknown ? "hsl(0, 84%, 60%)" : "hsl(142, 71%, 45%)";
-          const textWidth = ctx.measureText(label).width;
-          ctx.fillRect(box.x, box.y - 24, textWidth + 16, 24);
-          ctx.fillStyle = "#fff";
+          // Label
+          const label = isUnknown
+            ? "Desconhecido"
+            : `${student?.name || bestMatch.label} (${(confidence * 100).toFixed(0)}%)`;
           ctx.font = "14px sans-serif";
-          ctx.fillText(label, box.x + 8, box.y - 7);
+          const textWidth = ctx.measureText(label).width;
+          ctx.fillStyle = isUnknown ? "hsl(0, 84%, 60%)" : "hsl(142, 71%, 45%)";
+          ctx.fillRect(px, py - 24, textWidth + 16, 24);
+          ctx.fillStyle = "#fff";
+          ctx.fillText(label, px + 8, py - 7);
 
+          // Registrar presença (1x por sessão por aluno)
           if (!isUnknown && student && !recognizedInSessionRef.current.has(student.id)) {
             recognizedInSessionRef.current.add(student.id);
             const status = confidence > 0.7 ? "success" : confidence > 0.5 ? "warning" : "error";
@@ -132,11 +143,14 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
             };
             addAttendanceRecord(record);
             setSessionResults((prev) => [record, ...prev]);
-            toast({ title: "Aluno Reconhecido", description: `${student.name} — ${(confidence * 100).toFixed(1)}% — ${location}` });
+            toast({
+              title: "Aluno Reconhecido",
+              description: `${student.name} — ${(confidence * 100).toFixed(1)}% — ${location}`,
+            });
           }
         }
       } catch (err) {
-        console.error("Detection error:", err);
+        console.error("Erro de detecção:", err);
       }
 
       if (isScanningRef.current) {
@@ -144,7 +158,6 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
       }
     };
 
-    // Wait for video to be ready
     if (video.readyState >= 2) {
       detectionLoopRef.current = requestAnimationFrame(detect);
     } else {
