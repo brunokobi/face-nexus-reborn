@@ -1,7 +1,6 @@
-import { useState, useCallback } from "react";
+import { useReducer, useCallback } from "react";
 import type { Student, AttendanceRecord } from "@/types/student";
 
-// Simple in-memory store with localStorage persistence
 const STORAGE_KEY = "presence-now-students";
 const ATTENDANCE_KEY = "presence-now-attendance";
 
@@ -9,14 +8,17 @@ function loadStudents(): Student[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return parsed.map((s: any) => ({
-      ...s,
-      registrationDate: new Date(s.registrationDate),
-      faceDescriptor: s.faceDescriptor
-        ? new Float32Array(s.faceDescriptor)
-        : undefined,
-    }));
+    const parsed = JSON.parse(raw) as unknown[];
+    return parsed.map((s) => {
+      const rec = s as Record<string, unknown>;
+      return {
+        ...(rec as Omit<Student, "registrationDate" | "faceDescriptor">),
+        registrationDate: new Date(rec.registrationDate as string),
+        faceDescriptor: rec.faceDescriptor
+          ? new Float32Array(rec.faceDescriptor as number[])
+          : undefined,
+      } as Student;
+    });
   } catch {
     return [];
   }
@@ -35,11 +37,14 @@ function loadAttendance(): AttendanceRecord[] {
   try {
     const raw = localStorage.getItem(ATTENDANCE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return parsed.map((r: any) => ({
-      ...r,
-      timestamp: new Date(r.timestamp),
-    }));
+    const parsed = JSON.parse(raw) as unknown[];
+    return parsed.map((r) => {
+      const rec = r as Record<string, unknown>;
+      return {
+        ...(rec as Omit<AttendanceRecord, "timestamp">),
+        timestamp: new Date(rec.timestamp as string),
+      } as AttendanceRecord;
+    });
   } catch {
     return [];
   }
@@ -49,55 +54,77 @@ function saveAttendance(records: AttendanceRecord[]) {
   localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(records));
 }
 
-export function useStudentStore() {
-  const [students, setStudents] = useState<Student[]>(loadStudents);
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>(loadAttendance);
+interface StoreState {
+  students: Student[];
+  attendance: AttendanceRecord[];
+}
 
-  const addStudent = useCallback((student: Student) => {
-    setStudents((prev) => {
-      const next = [...prev, student];
+type StoreAction =
+  | { type: "ADD_STUDENT"; student: Student }
+  | { type: "UPDATE_STUDENT"; id: string; data: Partial<Student> }
+  | { type: "REMOVE_STUDENT"; id: string }
+  | { type: "ADD_ATTENDANCE"; record: AttendanceRecord };
+
+function reducer(state: StoreState, action: StoreAction): StoreState {
+  switch (action.type) {
+    case "ADD_STUDENT": {
+      const next = [...state.students, action.student];
       saveStudents(next);
-      return next;
-    });
-  }, []);
-
-  const updateStudent = useCallback((id: string, data: Partial<Student>) => {
-    setStudents((prev) => {
-      const next = prev.map((s) => (s.id === id ? { ...s, ...data } : s));
+      return { ...state, students: next };
+    }
+    case "UPDATE_STUDENT": {
+      const next = state.students.map((s) =>
+        s.id === action.id ? { ...s, ...action.data } : s
+      );
       saveStudents(next);
-      return next;
-    });
-  }, []);
-
-  const removeStudent = useCallback((id: string) => {
-    setStudents((prev) => {
-      const next = prev.filter((s) => s.id !== id);
+      return { ...state, students: next };
+    }
+    case "REMOVE_STUDENT": {
+      const next = state.students.filter((s) => s.id !== action.id);
       saveStudents(next);
-      return next;
-    });
-  }, []);
-
-  const addAttendanceRecord = useCallback((record: AttendanceRecord) => {
-    setAttendance((prev) => {
-      const next = [record, ...prev];
-      saveAttendance(next);
-      return next;
-    });
-    // Increment presence count for the student
-    setStudents((prev) => {
-      const next = prev.map((s) =>
-        s.id === record.studentId
+      return { ...state, students: next };
+    }
+    case "ADD_ATTENDANCE": {
+      const nextAttendance = [action.record, ...state.attendance];
+      const nextStudents = state.students.map((s) =>
+        s.id === action.record.studentId
           ? { ...s, presenceCount: s.presenceCount + 1 }
           : s
       );
-      saveStudents(next);
-      return next;
-    });
+      saveAttendance(nextAttendance);
+      saveStudents(nextStudents);
+      return { students: nextStudents, attendance: nextAttendance };
+    }
+  }
+}
+
+const initialState: StoreState = {
+  students: loadStudents(),
+  attendance: loadAttendance(),
+};
+
+export function useStudentStore() {
+  const [state, dispatch] = useReducer(reducer, initialState);
+
+  const addStudent = useCallback((student: Student) => {
+    dispatch({ type: "ADD_STUDENT", student });
+  }, []);
+
+  const updateStudent = useCallback((id: string, data: Partial<Student>) => {
+    dispatch({ type: "UPDATE_STUDENT", id, data });
+  }, []);
+
+  const removeStudent = useCallback((id: string) => {
+    dispatch({ type: "REMOVE_STUDENT", id });
+  }, []);
+
+  const addAttendanceRecord = useCallback((record: AttendanceRecord) => {
+    dispatch({ type: "ADD_ATTENDANCE", record });
   }, []);
 
   return {
-    students,
-    attendance,
+    students: state.students,
+    attendance: state.attendance,
     addStudent,
     updateStudent,
     removeStudent,

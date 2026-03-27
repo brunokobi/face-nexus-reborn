@@ -162,7 +162,9 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
       detectionLoopRef.current = requestAnimationFrame(detect);
     } else {
       video.addEventListener("playing", () => {
-        detectionLoopRef.current = requestAnimationFrame(detect);
+        if (isScanningRef.current) {
+          detectionLoopRef.current = requestAnimationFrame(detect);
+        }
       }, { once: true });
     }
   };
