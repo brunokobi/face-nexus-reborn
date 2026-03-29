@@ -48,15 +48,25 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
   }, [cleanupDetection]);
 
   const handleRequestStart = () => {
-    const studentsWithFace = students.filter((s) => s.faceDescriptor);
-    if (studentsWithFace.length === 0) {
+    if (students.length === 0) {
       toast({
         title: "Nenhum aluno cadastrado",
-        description: "Cadastre alunos com captura facial antes de iniciar o reconhecimento.",
+        description: "Cadastre ao menos um aluno antes de iniciar o reconhecimento.",
         variant: "destructive",
       });
       return;
     }
+
+    const studentsWithFace = students.filter((s) => s.faceDescriptor);
+    if (studentsWithFace.length === 0) {
+      toast({
+        title: "Biometria não cadastrada",
+        description: "Os alunos existentes ainda não têm biometria facial salva. Edite o aluno e capture a foto novamente.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setShowLocationModal(true);
   };
 
