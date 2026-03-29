@@ -112,6 +112,9 @@ export interface UseMediaPipeReturn {
   captureDescriptor: (
     video: HTMLVideoElement
   ) => Promise<{ descriptor: Float32Array; imageBase64: string }>;
+  captureDescriptorFromFile: (
+    file: File
+  ) => Promise<{ descriptor: Float32Array; imageBase64: string }>;
 }
 
 export function useMediaPipe(): UseMediaPipeReturn {
@@ -256,5 +259,48 @@ export function useMediaPipe(): UseMediaPipeReturn {
     [detectFaces]
   );
 
-  return { isLoaded, isLoading, loadError, detectFaces, createMatcher, captureDescriptor };
+  /** Para upload de arquivo: lê a imagem, extrai descriptor via MediaPipe (IMAGE mode) e retorna base64. */
+  const captureDescriptorFromFile = useCallback(
+    async (file: File): Promise<{ descriptor: Float32Array; imageBase64: string }> => {
+      if (!faceLandmarkerInstance || !isLoaded) throw new Error("NOT_LOADED");
+
+      const imageBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = reject;
+        img.src = imageBase64;
+      });
+
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0);
+
+      // Imagem estática requer runningMode IMAGE; restaura VIDEO ao final.
+      await faceLandmarkerInstance.setOptions({ runningMode: "IMAGE" });
+      let result;
+      try {
+        result = faceLandmarkerInstance.detect(canvas);
+      } finally {
+        await faceLandmarkerInstance.setOptions({ runningMode: "VIDEO" });
+      }
+
+      if (!result.faceLandmarks || result.faceLandmarks.length === 0)
+        throw new Error("NO_FACE");
+      if (result.faceLandmarks.length > 1) throw new Error("MULTIPLE_FACES");
+
+      return { descriptor: buildDescriptor(result.faceLandmarks[0]), imageBase64 };
+    },
+    [isLoaded]
+  );
+
+  return { isLoaded, isLoading, loadError, detectFaces, createMatcher, captureDescriptor, captureDescriptorFromFile };
 }

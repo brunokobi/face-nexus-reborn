@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Camera, RotateCcw, Loader2, AlertCircle } from "lucide-react";
+import { Camera, RotateCcw, Loader2, AlertCircle, Upload } from "lucide-react";
 import { useCamera } from "@/hooks/use-camera";
 import { useMediaPipe } from "@/hooks/use-mediapipe";
 
@@ -11,8 +11,9 @@ interface WebcamCaptureProps {
 
 export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { startCamera, stopCamera } = useCamera();
-  const { isLoaded, isLoading, loadError, captureDescriptor } = useMediaPipe();
+  const { isLoaded, isLoading, loadError, captureDescriptor, captureDescriptorFromFile } = useMediaPipe();
   const [cameraActive, setCameraActive] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
@@ -29,8 +30,7 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
     setError(null);
     const ok = await startCamera(videoRef.current);
     if (!ok) {
-      const msg =
-        "Não foi possível acessar a câmera. Verifique as permissões do navegador.";
+      const msg = "Não foi possível acessar a câmera. Verifique as permissões do navegador.";
       setError(msg);
       onError?.(msg);
       return;
@@ -52,19 +52,45 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
       onCapture(result.imageBase64, result.descriptor);
     } catch (err: any) {
       if (err?.message === "NO_FACE") {
-        setError(
-          "Nenhum rosto detectado. Posicione-se melhor em frente à câmera."
-        );
+        setError("Nenhum rosto detectado. Posicione-se melhor em frente à câmera.");
       } else if (err?.message === "MULTIPLE_FACES") {
-        setError(
-          "Mais de um rosto detectado. Apenas uma pessoa deve estar em frente à câmera."
-        );
+        setError("Mais de um rosto detectado. Apenas uma pessoa deve estar em frente à câmera.");
       } else {
         console.error("Erro de captura:", err);
         setError("Erro ao processar rosto. Tente novamente.");
       }
     } finally {
       setProcessing(false);
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Para a câmera caso esteja ativa
+    stopCamera();
+    setCameraActive(false);
+    setError(null);
+    setProcessing(true);
+
+    try {
+      const result = await captureDescriptorFromFile(file);
+      setCapturedImage(result.imageBase64);
+      onCapture(result.imageBase64, result.descriptor);
+    } catch (err: any) {
+      if (err?.message === "NO_FACE") {
+        setError("Nenhum rosto detectado na imagem. Tente outra foto.");
+      } else if (err?.message === "MULTIPLE_FACES") {
+        setError("Mais de um rosto na imagem. Envie uma foto com apenas uma pessoa.");
+      } else {
+        console.error("Erro ao processar arquivo:", err);
+        setError("Erro ao processar imagem. Tente novamente.");
+      }
+    } finally {
+      setProcessing(false);
+      // Reseta o input para permitir reenvio do mesmo arquivo
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -96,20 +122,10 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
     <div className="space-y-3">
       <div className="relative aspect-[4/3] bg-muted rounded-lg overflow-hidden">
         {capturedImage ? (
-          <img
-            src={capturedImage}
-            alt="Foto capturada"
-            className="w-full h-full object-cover"
-          />
+          <img src={capturedImage} alt="Foto capturada" className="w-full h-full object-cover" />
         ) : (
           <>
-            <video
-              ref={videoRef}
-              className="w-full h-full object-cover"
-              autoPlay
-              muted
-              playsInline
-            />
+            <video ref={videoRef} className="w-full h-full object-cover" autoPlay muted playsInline />
             {!cameraActive && (
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-muted/80 gap-2">
                 <Camera className="h-10 w-10 text-muted-foreground" />
@@ -132,19 +148,22 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
         </div>
       )}
 
-      <div className="flex gap-2 justify-center">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleFileChange}
+      />
+
+      <div className="flex gap-2 justify-center flex-wrap">
         {capturedImage ? (
           <Button variant="outline" onClick={handleRetake} size="sm">
             <RotateCcw className="h-4 w-4 mr-1" />
             Tirar Novamente
           </Button>
         ) : cameraActive ? (
-          <Button
-            variant="hero"
-            onClick={handleCapture}
-            disabled={processing || !isLoaded}
-            size="sm"
-          >
+          <Button variant="hero" onClick={handleCapture} disabled={processing || !isLoaded} size="sm">
             {processing ? (
               <>
                 <Loader2 className="h-4 w-4 mr-1 animate-spin" />
@@ -158,15 +177,30 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
             )}
           </Button>
         ) : (
-          <Button
-            variant="outline"
-            onClick={handleStartCamera}
-            disabled={!isLoaded}
-            size="sm"
-          >
-            <Camera className="h-4 w-4 mr-1" />
-            Abrir Câmera
-          </Button>
+          <>
+            <Button variant="outline" onClick={handleStartCamera} disabled={!isLoaded || processing} size="sm">
+              <Camera className="h-4 w-4 mr-1" />
+              Abrir Câmera
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!isLoaded || processing}
+              size="sm"
+            >
+              {processing ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                  Processando...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4 mr-1" />
+                  Enviar do Dispositivo
+                </>
+              )}
+            </Button>
+          </>
         )}
       </div>
     </div>

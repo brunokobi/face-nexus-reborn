@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Plus, Search, Edit, Trash2, User, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { WebcamCapture } from "@/components/scanner/WebcamCapture";
+import { supabase } from "@/integrations/supabase/client";
 import type { Student } from "@/types/student";
 
 interface StudentsPageProps {
@@ -18,25 +19,36 @@ interface StudentsPageProps {
   removeStudent: (id: string) => void;
 }
 
+/** Converte um data URL base64 em Blob para upload. */
+function base64ToBlob(dataUrl: string, mimeType = "image/jpeg"): Blob {
+  const [, base64] = dataUrl.split(",");
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mimeType });
+}
+
 export function StudentsPage({ students, addStudent, updateStudent, removeStudent }: StudentsPageProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
-  const [formData, setFormData] = useState({ name: "", email: "", course: "" });
+  const [formData, setFormData] = useState({ matricula: "", name: "", email: "", course: "" });
   const [capturedAvatar, setCapturedAvatar] = useState<string | null>(null);
   const [capturedDescriptor, setCapturedDescriptor] = useState<Float32Array | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const { toast } = useToast();
 
   const filteredStudents = students.filter(
     (s) =>
       s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       s.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      s.course.toLowerCase().includes(searchTerm.toLowerCase())
+      s.course.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      s.matricula?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const handleAddStudent = () => {
     setEditingStudent(null);
-    setFormData({ name: "", email: "", course: "" });
+    setFormData({ matricula: "", name: "", email: "", course: "" });
     setCapturedAvatar(null);
     setCapturedDescriptor(null);
     setIsDialogOpen(true);
@@ -44,7 +56,7 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
 
   const handleEditStudent = (student: Student) => {
     setEditingStudent(student);
-    setFormData({ name: student.name, email: student.email, course: student.course });
+    setFormData({ matricula: student.matricula ?? "", name: student.name, email: student.email, course: student.course });
     setCapturedAvatar(student.avatar || null);
     setCapturedDescriptor(student.faceDescriptor || null);
     setIsDialogOpen(true);
@@ -55,9 +67,9 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
     toast({ title: "Aluno removido", description: "O aluno foi removido com sucesso." });
   };
 
-  const handleSaveStudent = () => {
-    if (!formData.name || !formData.email || !formData.course) {
-      toast({ title: "Campos obrigatórios", description: "Preencha todos os campos.", variant: "destructive" });
+  const handleSaveStudent = async () => {
+    if (!formData.matricula || !formData.name) {
+      toast({ title: "Campos obrigatórios", description: "Preencha a matrícula e o nome.", variant: "destructive" });
       return;
     }
     if (!capturedDescriptor && !editingStudent?.faceDescriptor) {
@@ -65,28 +77,106 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
       return;
     }
 
-    if (editingStudent) {
-      updateStudent(editingStudent.id, {
-        ...formData,
-        ...(capturedAvatar ? { avatar: capturedAvatar } : {}),
-        ...(capturedDescriptor ? { faceDescriptor: capturedDescriptor } : {}),
-      });
-      toast({ title: "Aluno atualizado", description: "Dados atualizados com sucesso." });
-    } else {
-      const newStudent: Student = {
-        id: crypto.randomUUID(),
-        ...formData,
-        registrationDate: new Date(),
-        avatar: capturedAvatar || undefined,
-        faceDescriptor: capturedDescriptor || undefined,
-        presenceCount: 0,
-        totalClasses: 0,
-      };
-      addStudent(newStudent);
-      toast({ title: "Aluno cadastrado", description: "Novo aluno cadastrado com reconhecimento facial." });
-    }
+    setIsSaving(true);
+    try {
+      const BUCKET = "fotos-alunos";
+      const studentId = editingStudent?.id ?? crypto.randomUUID();
 
-    setIsDialogOpen(false);
+      // 1. Determina a foto a usar
+      const avatarToUpload = capturedAvatar ?? (editingStudent?.avatar ?? null);
+
+      let photoUrl: string;
+
+      if (avatarToUpload && avatarToUpload.startsWith("data:")) {
+        const blob = base64ToBlob(avatarToUpload);
+        const filePath = `${formData.matricula}/${Date.now()}.jpg`;
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string;
+
+        // Obtém o token da sessão atual (fallback para anon key)
+        const { data: { session } } = await supabase.auth.getSession();
+        const authToken = session?.access_token ?? anonKey;
+
+        // Upload direto via fetch (contorna problemas do SDK)
+        const uploadRes = await fetch(
+          `${supabaseUrl}/storage/v1/object/${BUCKET}/${filePath}`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${authToken}`,
+              "Content-Type": "image/jpeg",
+              apikey: anonKey,
+              "x-upsert": "true",
+            },
+            body: blob,
+          }
+        );
+
+        if (!uploadRes.ok) {
+          const errBody = await uploadRes.json().catch(() => ({ message: uploadRes.statusText }));
+          console.error("Erro no upload Storage:", errBody);
+          toast({
+            title: "Erro ao salvar foto",
+            description: errBody?.message ?? uploadRes.statusText,
+            variant: "destructive",
+          });
+          return;
+        }
+
+        photoUrl = `${supabaseUrl}/storage/v1/object/public/${BUCKET}/${filePath}`;
+
+      } else if (avatarToUpload && avatarToUpload.startsWith("http")) {
+        // Edição sem nova foto — mantém URL já existente no Storage
+        photoUrl = avatarToUpload;
+
+      } else {
+        toast({ title: "Foto obrigatória", description: "Capture ou envie uma foto antes de salvar.", variant: "destructive" });
+        return;
+      }
+
+      // 2. Salva na tabela alunos (obrigatório)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: dbError } = await (supabase as any)
+        .from("alunos")
+        .upsert({ id: studentId, matricula: formData.matricula, nome: formData.name, foto: photoUrl });
+
+      if (dbError) {
+        console.error("Erro ao salvar no banco:", dbError);
+        toast({ title: "Erro ao salvar no banco", description: dbError.message, variant: "destructive" });
+        return;
+      }
+
+      // 3. Ambos Supabase OK — atualiza estado local (necessário para reconhecimento facial em runtime)
+      if (editingStudent) {
+        updateStudent(editingStudent.id, {
+          matricula: formData.matricula,
+          name: formData.name,
+          email: formData.email,
+          course: formData.course,
+          avatar: photoUrl,
+          ...(capturedDescriptor ? { faceDescriptor: capturedDescriptor } : {}),
+        });
+        toast({ title: "Aluno atualizado", description: "Dados atualizados com sucesso." });
+      } else {
+        addStudent({
+          id: studentId,
+          matricula: formData.matricula,
+          name: formData.name,
+          email: formData.email,
+          course: formData.course,
+          registrationDate: new Date(),
+          avatar: photoUrl,
+          faceDescriptor: capturedDescriptor ?? undefined,
+          presenceCount: 0,
+          totalClasses: 0,
+        });
+        toast({ title: "Aluno cadastrado", description: "Aluno salvo no banco com sucesso." });
+      }
+
+      setIsDialogOpen(false);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const getAttendancePercentage = (s: Student) =>
@@ -176,6 +266,9 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
                               <CheckCircle className="h-4 w-4 text-success" />
                             )}
                           </div>
+                          {student.matricula && (
+                            <p className="text-sm font-medium text-primary">Matrícula: {student.matricula}</p>
+                          )}
                           <p className="text-muted-foreground">{student.email}</p>
                           <p className="text-sm text-muted-foreground">{student.course}</p>
                         </div>
@@ -205,7 +298,7 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
         </Card>
 
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogContent className="sm:max-w-lg">
+          <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>{editingStudent ? "Editar Aluno" : "Novo Aluno"}</DialogTitle>
               <DialogDescription>
@@ -214,16 +307,41 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
             </DialogHeader>
             <div className="space-y-4">
               <div>
+                <Label htmlFor="matricula">Matrícula</Label>
+                <Input
+                  id="matricula"
+                  value={formData.matricula}
+                  onChange={(e) => setFormData((p) => ({ ...p, matricula: e.target.value }))}
+                  placeholder="Digite a matrícula do aluno"
+                />
+              </div>
+              <div>
                 <Label htmlFor="name">Nome Completo</Label>
-                <Input id="name" value={formData.name} onChange={(e) => setFormData((p) => ({ ...p, name: e.target.value }))} placeholder="Digite o nome completo" />
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) => setFormData((p) => ({ ...p, name: e.target.value }))}
+                  placeholder="Digite o nome completo"
+                />
               </div>
               <div>
                 <Label htmlFor="email">Email</Label>
-                <Input id="email" type="email" value={formData.email} onChange={(e) => setFormData((p) => ({ ...p, email: e.target.value }))} placeholder="Digite o email" />
+                <Input
+                  id="email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData((p) => ({ ...p, email: e.target.value }))}
+                  placeholder="Digite o email"
+                />
               </div>
               <div>
                 <Label htmlFor="course">Curso</Label>
-                <Input id="course" value={formData.course} onChange={(e) => setFormData((p) => ({ ...p, course: e.target.value }))} placeholder="Digite o nome do curso" />
+                <Input
+                  id="course"
+                  value={formData.course}
+                  onChange={(e) => setFormData((p) => ({ ...p, course: e.target.value }))}
+                  placeholder="Digite o nome do curso"
+                />
               </div>
               <div>
                 <Label>Captura Facial</Label>
@@ -243,9 +361,11 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
               </div>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancelar</Button>
-              <Button variant="hero" onClick={handleSaveStudent}>
-                {editingStudent ? "Atualizar" : "Cadastrar"}
+              <Button variant="outline" onClick={() => setIsDialogOpen(false)} disabled={isSaving}>
+                Cancelar
+              </Button>
+              <Button variant="hero" onClick={handleSaveStudent} disabled={isSaving}>
+                {isSaving ? "Salvando..." : editingStudent ? "Atualizar" : "Cadastrar"}
               </Button>
             </DialogFooter>
           </DialogContent>

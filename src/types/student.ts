@@ -1,5 +1,6 @@
 export interface Student {
   id: string;
+  matricula?: string;
   name: string;
   email: string;
   course: string;
