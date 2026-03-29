@@ -124,10 +124,27 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
       }
 
       // 2. Salva na tabela alunos (obrigatório)
+      const descriptorToSave = capturedDescriptor
+        ? Array.from(capturedDescriptor)
+        : editingStudent?.faceDescriptor
+          ? Array.from(editingStudent.faceDescriptor)
+          : null;
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: dbError } = await (supabase as any)
         .from("alunos")
-        .upsert({ id: studentId, matricula: formData.matricula, nome: formData.name, foto: photoUrl });
+        .upsert(
+          {
+            id: studentId,
+            matricula: formData.matricula,
+            nome: formData.name,
+            email: formData.email,
+            course: formData.course,
+            foto: photoUrl,
+            face_descriptor: descriptorToSave,
+          },
+          { onConflict: "id" }
+        );
 
       if (dbError) {
         console.error("Erro ao salvar no banco:", dbError);
