@@ -90,40 +90,29 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
       if (avatarToUpload && avatarToUpload.startsWith("data:")) {
         const blob = base64ToBlob(avatarToUpload);
         const filePath = `${formData.matricula}/${Date.now()}.jpg`;
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-        const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string;
 
-        // Obtém o token da sessão atual (fallback para anon key)
-        const { data: { session } } = await supabase.auth.getSession();
-        const authToken = session?.access_token ?? anonKey;
+        const { error: uploadError } = await supabase.storage
+          .from(BUCKET)
+          .upload(filePath, blob, {
+            contentType: "image/jpeg",
+            upsert: true,
+          });
 
-        // Upload direto via fetch (contorna problemas do SDK)
-        const uploadRes = await fetch(
-          `${supabaseUrl}/storage/v1/object/${BUCKET}/${filePath}`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${authToken}`,
-              "Content-Type": "image/jpeg",
-              apikey: anonKey,
-              "x-upsert": "true",
-            },
-            body: blob,
-          }
-        );
-
-        if (!uploadRes.ok) {
-          const errBody = await uploadRes.json().catch(() => ({ message: uploadRes.statusText }));
-          console.error("Erro no upload Storage:", errBody);
+        if (uploadError) {
+          console.error("Erro no upload Storage:", uploadError);
           toast({
             title: "Erro ao salvar foto",
-            description: errBody?.message ?? uploadRes.statusText,
+            description: uploadError.message,
             variant: "destructive",
           });
           return;
         }
 
-        photoUrl = `${supabaseUrl}/storage/v1/object/public/${BUCKET}/${filePath}`;
+        const { data: publicUrlData } = supabase.storage
+          .from(BUCKET)
+          .getPublicUrl(filePath);
+
+        photoUrl = publicUrlData.publicUrl;
 
       } else if (avatarToUpload && avatarToUpload.startsWith("http")) {
         // Edição sem nova foto — mantém URL já existente no Storage
