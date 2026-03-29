@@ -16,27 +16,42 @@ export type Database = {
     Tables: {
       alunos: {
         Row: {
+          course: string | null
           created_at: string
+          email: string | null
+          face_descriptor: number[] | null
           foto: string | null
           id: string
           matricula: string
           nome: string
+          presence_count: number
+          total_classes: number
           user_id: string
         }
         Insert: {
+          course?: string | null
           created_at?: string
+          email?: string | null
+          face_descriptor?: number[] | null
           foto?: string | null
           id?: string
           matricula: string
           nome: string
+          presence_count?: number
+          total_classes?: number
           user_id?: string
         }
         Update: {
+          course?: string | null
           created_at?: string
+          email?: string | null
+          face_descriptor?: number[] | null
           foto?: string | null
           id?: string
           matricula?: string
           nome?: string
+          presence_count?: number
+          total_classes?: number
           user_id?: string
         }
         Relationships: []

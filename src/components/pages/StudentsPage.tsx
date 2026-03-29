@@ -62,7 +62,14 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
     setIsDialogOpen(true);
   };
 
-  const handleDeleteStudent = (id: string) => {
+  const handleDeleteStudent = async (id: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).from("alunos").delete().eq("id", id);
+    if (error) {
+      console.error("Erro ao remover aluno:", error);
+      toast({ title: "Erro ao remover", description: error.message, variant: "destructive" });
+      return;
+    }
     removeStudent(id);
     toast({ title: "Aluno removido", description: "O aluno foi removido com sucesso." });
   };
@@ -124,10 +131,27 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
       }
 
       // 2. Salva na tabela alunos (obrigatório)
+      const descriptorToSave = capturedDescriptor
+        ? Array.from(capturedDescriptor)
+        : editingStudent?.faceDescriptor
+          ? Array.from(editingStudent.faceDescriptor)
+          : null;
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: dbError } = await (supabase as any)
         .from("alunos")
-        .upsert({ id: studentId, matricula: formData.matricula, nome: formData.name, foto: photoUrl });
+        .upsert(
+          {
+            id: studentId,
+            matricula: formData.matricula,
+            nome: formData.name,
+            email: formData.email,
+            course: formData.course,
+            foto: photoUrl,
+            face_descriptor: descriptorToSave,
+          },
+          { onConflict: "id" }
+        );
 
       if (dbError) {
         console.error("Erro ao salvar no banco:", dbError);
