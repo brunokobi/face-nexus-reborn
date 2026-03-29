@@ -62,7 +62,14 @@ export function StudentsPage({ students, addStudent, updateStudent, removeStuden
     setIsDialogOpen(true);
   };
 
-  const handleDeleteStudent = (id: string) => {
+  const handleDeleteStudent = async (id: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).from("alunos").delete().eq("id", id);
+    if (error) {
+      console.error("Erro ao remover aluno:", error);
+      toast({ title: "Erro ao remover", description: error.message, variant: "destructive" });
+      return;
+    }
     removeStudent(id);
     toast({ title: "Aluno removido", description: "O aluno foi removido com sucesso." });
   };
