@@ -21,6 +21,7 @@ const Index = () => {
             students={students}
             attendance={attendance}
             addAttendanceRecord={addAttendanceRecord}
+            updateStudent={updateStudent}
           />
         );
       case "students":
