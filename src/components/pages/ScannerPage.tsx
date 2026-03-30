@@ -131,14 +131,6 @@ export function ScannerPage({ students, attendance, addAttendanceRecord, updateS
     } finally {
       setIsPreparingBiometrics(false);
     }
-
-    if (students.length === 0) {
-      toast({
-        title: "Nenhum aluno cadastrado",
-        description: "Cadastre ao menos um aluno antes de iniciar o reconhecimento.",
-        variant: "destructive",
-      });
-    }
   };
 
   const handleLocationConfirm = async (location: string) => {
