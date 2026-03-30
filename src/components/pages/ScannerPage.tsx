@@ -7,16 +7,25 @@ import { useToast } from "@/hooks/use-toast";
 import { useMediaPipe } from "@/hooks/use-mediapipe";
 import { useCamera } from "@/hooks/use-camera";
 import { LocationModal } from "@/components/scanner/LocationModal";
+import { supabase } from "@/integrations/supabase/client";
 import type { Student, AttendanceRecord } from "@/types/student";
 
 interface ScannerPageProps {
   students: Student[];
   attendance: AttendanceRecord[];
   addAttendanceRecord: (record: AttendanceRecord) => void;
+  updateStudent: (id: string, data: Partial<Student>) => void;
 }
 
-export function ScannerPage({ students, attendance, addAttendanceRecord }: ScannerPageProps) {
+const EXPECTED_DESCRIPTOR_SIZE = 204;
+
+function hasValidFaceDescriptor(student: Student) {
+  return !!student.faceDescriptor && student.faceDescriptor.length === EXPECTED_DESCRIPTOR_SIZE;
+}
+
+export function ScannerPage({ students, attendance, addAttendanceRecord, updateStudent }: ScannerPageProps) {
   const [isScanning, setIsScanning] = useState(false);
+  const [isPreparingBiometrics, setIsPreparingBiometrics] = useState(false);
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [currentLocation, setCurrentLocation] = useState("");
   const [sessionResults, setSessionResults] = useState<AttendanceRecord[]>([]);
@@ -24,10 +33,15 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const detectionLoopRef = useRef<number | null>(null);
   const isScanningRef = useRef(false);
+  const recognitionStudentsRef = useRef<Student[]>(students);
   const { toast } = useToast();
-  const { isLoaded, isLoading, loadError, detectFaces, createMatcher } = useMediaPipe();
+  const { isLoaded, isLoading, loadError, detectFaces, createMatcher, captureDescriptorFromFile } = useMediaPipe();
   const { startCamera, stopCamera } = useCamera();
   const recognizedInSessionRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    recognitionStudentsRef.current = students;
+  }, [students]);
 
   const cleanupDetection = useCallback(() => {
     isScanningRef.current = false;
@@ -47,7 +61,48 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
     return () => { cleanupDetection(); };
   }, [cleanupDetection]);
 
-  const handleRequestStart = () => {
+  const hydrateMissingDescriptors = useCallback(async () => {
+    const hydratedStudents = await Promise.all(
+      students.map(async (student) => {
+        if (hasValidFaceDescriptor(student) || !student.avatar) {
+          return student;
+        }
+
+        try {
+          const response = await fetch(student.avatar);
+          if (!response.ok) {
+            throw new Error(`Falha ao baixar imagem (${response.status})`);
+          }
+
+          const blob = await response.blob();
+          const file = new File([blob], `${student.id}.jpg`, {
+            type: blob.type || "image/jpeg",
+          });
+
+          const { descriptor } = await captureDescriptorFromFile(file);
+          const { error } = await supabase
+            .from("alunos")
+            .update({ face_descriptor: Array.from(descriptor) })
+            .eq("id", student.id);
+
+          if (error) {
+            console.error(`Erro ao salvar biometria do aluno ${student.id}:`, error);
+          }
+
+          updateStudent(student.id, { faceDescriptor: descriptor });
+          return { ...student, faceDescriptor: descriptor };
+        } catch (error) {
+          console.error(`Erro ao reconstruir biometria do aluno ${student.id}:`, error);
+          return student;
+        }
+      })
+    );
+
+    recognitionStudentsRef.current = hydratedStudents;
+    return hydratedStudents;
+  }, [students, captureDescriptorFromFile, updateStudent]);
+
+  const handleRequestStart = async () => {
     if (students.length === 0) {
       toast({
         title: "Nenhum aluno cadastrado",
@@ -57,17 +112,33 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
       return;
     }
 
-    const studentsWithFace = students.filter((s) => s.faceDescriptor);
-    if (studentsWithFace.length === 0) {
-      toast({
-        title: "Biometria não cadastrada",
-        description: "Os alunos existentes ainda não têm biometria facial salva. Edite o aluno e capture a foto novamente.",
-        variant: "destructive",
-      });
-      return;
+    setIsPreparingBiometrics(true);
+
+    try {
+      const preparedStudents = await hydrateMissingDescriptors();
+      const studentsWithFace = preparedStudents.filter(hasValidFaceDescriptor);
+
+      if (studentsWithFace.length === 0) {
+        toast({
+          title: "Biometria não cadastrada",
+          description: "Não foi possível gerar a biometria facial a partir das fotos salvas. Edite o aluno e capture a foto novamente.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setShowLocationModal(true);
+    } finally {
+      setIsPreparingBiometrics(false);
     }
 
-    setShowLocationModal(true);
+    if (students.length === 0) {
+      toast({
+        title: "Nenhum aluno cadastrado",
+        description: "Cadastre ao menos um aluno antes de iniciar o reconhecimento.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleLocationConfirm = async (location: string) => {
@@ -88,7 +159,8 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
   };
 
   const startDetectionLoop = (location: string) => {
-    const matcher = createMatcher(students);
+    const activeStudents = recognitionStudentsRef.current;
+    const matcher = createMatcher(activeStudents);
     if (!matcher || !videoRef.current || !overlayRef.current) return;
 
     const video = videoRef.current;
@@ -120,7 +192,7 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
 
           // Confiança: distance 0 = 100%, threshold 0.25 = 0%
           const confidence = Math.max(0, Math.min(1, 1 - bestMatch.distance / 0.25));
-          const student = students.find((s) => s.id === bestMatch.label);
+          const student = activeStudents.find((s) => s.id === bestMatch.label);
 
           // Bounding box
           ctx.strokeStyle = isUnknown ? "hsl(0, 84%, 60%)" : "hsl(142, 71%, 45%)";
@@ -252,8 +324,8 @@ export function ScannerPage({ students, attendance, addAttendanceRecord }: Scann
                       <StopCircle className="h-5 w-5 mr-2" /> Parar Escaneamento
                     </Button>
                   ) : (
-                    <Button variant="scan" size="lg" onClick={handleRequestStart} disabled={!isLoaded || isLoading} className="text-lg px-8 py-6">
-                      <Camera className="h-5 w-5 mr-2" /> Iniciar Escaneamento
+                     <Button variant="scan" size="lg" onClick={handleRequestStart} disabled={!isLoaded || isLoading || isPreparingBiometrics} className="text-lg px-8 py-6">
+                       {isPreparingBiometrics ? <Loader2 className="h-5 w-5 mr-2 animate-spin" /> : <Camera className="h-5 w-5 mr-2" />} {isPreparingBiometrics ? "Preparando Biometrias" : "Iniciar Escaneamento"}
                     </Button>
                   )}
                 </div>
