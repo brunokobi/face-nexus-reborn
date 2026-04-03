@@ -1,8 +1,14 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Menu, X, Camera, Users, BarChart3, Settings, LogOut, Sun, Moon } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Menu, X, Camera, Users, BarChart3, Settings, LogOut, Sun, Moon, User } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 import logoIcon from "@/assets/logo-icon.png";
 
 interface NavbarProps {
