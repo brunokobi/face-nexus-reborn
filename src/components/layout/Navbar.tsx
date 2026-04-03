@@ -99,6 +99,14 @@ export function Navbar({ currentPage, onNavigate }: NavbarProps) {
             })}
             <Button
               variant="ghost"
+              className="w-full justify-start gap-2"
+              onClick={toggleTheme}
+            >
+              {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+              {theme === "light" ? "Tema Escuro" : "Tema Claro"}
+            </Button>
+            <Button
+              variant="ghost"
               className="w-full justify-start gap-2 text-destructive"
               onClick={signOut}
             >
