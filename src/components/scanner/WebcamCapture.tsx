@@ -51,10 +51,17 @@ export function WebcamCapture({ onCapture, onError }: WebcamCaptureProps) {
       setCapturedImage(result.imageBase64);
       onCapture(result.imageBase64, result.descriptor);
     } catch (err: any) {
-      if (err?.message === "NO_FACE") {
+      const msg = err?.message;
+      if (msg === "NO_FACE") {
         setError("Nenhum rosto detectado. Posicione-se melhor em frente à câmera.");
-      } else if (err?.message === "MULTIPLE_FACES") {
+      } else if (msg === "MULTIPLE_FACES") {
         setError("Mais de um rosto detectado. Apenas uma pessoa deve estar em frente à câmera.");
+      } else if (msg === "FACE_TOO_SMALL") {
+        setError("Rosto muito pequeno. Aproxime-se mais da câmera.");
+      } else if (msg === "FACE_NOT_CENTERED") {
+        setError("Rosto descentralizado. Posicione o rosto no centro da câmera.");
+      } else if (msg === "FACE_BLURRY") {
+        setError("Imagem borrada. Mantenha-se parado e garanta boa iluminação.");
       } else {
         console.error("Erro de captura:", err);
         setError("Erro ao processar rosto. Tente novamente.");
