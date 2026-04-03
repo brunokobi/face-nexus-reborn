@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Menu, X, Camera, Users, BarChart3, Settings, LogOut } from "lucide-react";
+import { Menu, X, Camera, Users, BarChart3, Settings, LogOut, Sun, Moon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useTheme } from "@/contexts/ThemeContext";
 import logoIcon from "@/assets/logo-icon.png";
 
 interface NavbarProps {
