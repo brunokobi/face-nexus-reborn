@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Menu, X, Camera, Users, BarChart3, Settings, LogOut } from "lucide-react";
+import { Menu, X, Camera, Users, BarChart3, Settings, LogOut, Sun, Moon } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useTheme } from "@/contexts/ThemeContext";
 import logoIcon from "@/assets/logo-icon.png";
 
 interface NavbarProps {
@@ -12,6 +13,7 @@ interface NavbarProps {
 export function Navbar({ currentPage, onNavigate }: NavbarProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { signOut, profile, isAdmin } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   const navigation = [
     { name: "Início", id: "home", icon: Camera },
@@ -51,6 +53,9 @@ export function Navbar({ currentPage, onNavigate }: NavbarProps) {
               );
             })}
             <div className="border-l border-border/50 pl-4 flex items-center gap-2">
+              <Button variant="ghost" size="icon" onClick={toggleTheme} title={theme === "light" ? "Tema escuro" : "Tema claro"}>
+                {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+              </Button>
               <span className="text-sm text-muted-foreground truncate max-w-[150px]">
                 {profile?.full_name || profile?.email || "Usuário"}
               </span>
@@ -92,6 +97,14 @@ export function Navbar({ currentPage, onNavigate }: NavbarProps) {
                 </Button>
               );
             })}
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-2"
+              onClick={toggleTheme}
+            >
+              {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+              {theme === "light" ? "Tema Escuro" : "Tema Claro"}
+            </Button>
             <Button
               variant="ghost"
               className="w-full justify-start gap-2 text-destructive"
