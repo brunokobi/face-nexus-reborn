@@ -18,8 +18,45 @@ interface NavbarProps {
 
 export function Navbar({ currentPage, onNavigate }: NavbarProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const { signOut, profile, isAdmin } = useAuth();
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [saving, setSaving] = useState(false);
+  const { signOut, profile, isAdmin, user } = useAuth();
   const { theme, toggleTheme } = useTheme();
+
+  const getInitials = (name?: string | null, email?: string | null) => {
+    if (name) {
+      return name.split(" ").map(n => n[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
+    }
+    if (email) return email[0].toUpperCase();
+    return "U";
+  };
+
+  const handleOpenProfile = () => {
+    setEditName(profile?.full_name || "");
+    setEditEmail(profile?.email || user?.email || "");
+    setIsProfileOpen(true);
+  };
+
+  const handleSaveProfile = async () => {
+    if (!user) return;
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ full_name: editName, email: editEmail })
+        .eq("user_id", user.id);
+      if (error) throw error;
+      toast.success("Perfil atualizado com sucesso!");
+      setIsProfileOpen(false);
+      window.location.reload();
+    } catch {
+      toast.error("Erro ao atualizar perfil");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const navigation = [
     { name: "Início", id: "home", icon: Camera },
