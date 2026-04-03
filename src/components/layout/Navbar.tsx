@@ -13,6 +13,7 @@ interface NavbarProps {
 export function Navbar({ currentPage, onNavigate }: NavbarProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { signOut, profile, isAdmin } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   const navigation = [
     { name: "Início", id: "home", icon: Camera },
