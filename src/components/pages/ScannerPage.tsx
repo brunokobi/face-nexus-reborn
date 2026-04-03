@@ -194,7 +194,7 @@ export function ScannerPage({ students, attendance, addAttendanceRecord, updateS
           // Label
           const label = isUnknown
             ? "Desconhecido"
-            : `${student?.name || bestMatch.label} (${(confidence * 100).toFixed(0)}%)`;
+            : `${student?.matricula || bestMatch.label} (${(confidence * 100).toFixed(0)}%)`;
           ctx.font = "14px sans-serif";
           const textWidth = ctx.measureText(label).width;
           ctx.fillStyle = isUnknown ? "hsl(0, 84%, 60%)" : "hsl(142, 71%, 45%)";
