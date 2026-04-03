@@ -323,6 +323,10 @@ export function useMediaPipe(): UseMediaPipeReturn {
       canvas.height = video.videoHeight;
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(video, 0, 0);
+
+      // Validação de qualidade
+      validateFaceQuality(results[0].box, canvas);
+
       const imageBase64 = canvas.toDataURL("image/jpeg", 0.8);
 
       return { descriptor: results[0].descriptor, imageBase64 };
