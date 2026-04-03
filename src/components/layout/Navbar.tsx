@@ -53,6 +53,9 @@ export function Navbar({ currentPage, onNavigate }: NavbarProps) {
               );
             })}
             <div className="border-l border-border/50 pl-4 flex items-center gap-2">
+              <Button variant="ghost" size="icon" onClick={toggleTheme} title={theme === "light" ? "Tema escuro" : "Tema claro"}>
+                {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+              </Button>
               <span className="text-sm text-muted-foreground truncate max-w-[150px]">
                 {profile?.full_name || profile?.email || "Usuário"}
               </span>
