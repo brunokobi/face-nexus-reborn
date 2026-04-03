@@ -103,7 +103,70 @@ function buildDescriptor(
   return desc;
 }
 
-/** Distância cosseno entre dois descritores unitários: 0 = idênticos, 2 = opostos. */
+/** Calcula a "nitidez" de uma região da imagem via variância do Laplaciano em grayscale. */
+function computeSharpness(canvas: HTMLCanvasElement, box: { x: number; y: number; width: number; height: number }): number {
+  const ctx = canvas.getContext("2d")!;
+  const sx = Math.max(0, Math.floor(box.x * canvas.width));
+  const sy = Math.max(0, Math.floor(box.y * canvas.height));
+  const sw = Math.min(canvas.width - sx, Math.floor(box.width * canvas.width));
+  const sh = Math.min(canvas.height - sy, Math.floor(box.height * canvas.height));
+  if (sw < 10 || sh < 10) return 0;
+
+  const imageData = ctx.getImageData(sx, sy, sw, sh);
+  const data = imageData.data;
+
+  // Converte para grayscale
+  const gray = new Float32Array(sw * sh);
+  for (let i = 0; i < gray.length; i++) {
+    const idx = i * 4;
+    gray[i] = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+  }
+
+  // Laplaciano simples (diferença de vizinhos)
+  let sum = 0, sumSq = 0, count = 0;
+  for (let y = 1; y < sh - 1; y++) {
+    for (let x = 1; x < sw - 1; x++) {
+      const lap =
+        -4 * gray[y * sw + x] +
+        gray[(y - 1) * sw + x] + gray[(y + 1) * sw + x] +
+        gray[y * sw + (x - 1)] + gray[y * sw + (x + 1)];
+      sum += lap;
+      sumSq += lap * lap;
+      count++;
+    }
+  }
+  const mean = sum / count;
+  return (sumSq / count) - mean * mean; // variância
+}
+
+/** Valida qualidade do rosto detectado. Lança erro descritivo se falhar. */
+function validateFaceQuality(
+  box: { x: number; y: number; width: number; height: number },
+  canvas: HTMLCanvasElement
+): void {
+  // 1. Tamanho mínimo do rosto
+  if (box.width < MIN_FACE_SIZE || box.height < MIN_FACE_SIZE) {
+    throw new Error("FACE_TOO_SMALL");
+  }
+
+  // 2. Centralização
+  const faceCenterX = box.x + box.width / 2;
+  const faceCenterY = box.y + box.height / 2;
+  if (
+    Math.abs(faceCenterX - 0.5) > CENTER_MARGIN ||
+    Math.abs(faceCenterY - 0.5) > CENTER_MARGIN
+  ) {
+    throw new Error("FACE_NOT_CENTERED");
+  }
+
+  // 3. Nitidez
+  const sharpness = computeSharpness(canvas, box);
+  if (sharpness < MIN_SHARPNESS) {
+    throw new Error("FACE_BLURRY");
+  }
+}
+
+
 function cosineDistance(a: Float32Array, b: Float32Array): number {
   let dot = 0;
   const len = Math.min(a.length, b.length);
