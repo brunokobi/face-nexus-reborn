@@ -194,7 +194,7 @@ export function ScannerPage({ students, attendance, addAttendanceRecord, updateS
           // Label
           const label = isUnknown
             ? "Desconhecido"
-            : `${student?.name || bestMatch.label} (${(confidence * 100).toFixed(0)}%)`;
+            : `${student?.matricula || bestMatch.label} (${(confidence * 100).toFixed(0)}%)`;
           ctx.font = "14px sans-serif";
           const textWidth = ctx.measureText(label).width;
           ctx.fillStyle = isUnknown ? "hsl(0, 84%, 60%)" : "hsl(142, 71%, 45%)";
@@ -203,9 +203,9 @@ export function ScannerPage({ students, attendance, addAttendanceRecord, updateS
           ctx.fillText(label, px + 8, py - 7);
 
           // Registrar presença (1x por sessão por aluno)
-          if (!isUnknown && student && !recognizedInSessionRef.current.has(student.id)) {
+          if (!isUnknown && student && confidence > 0.9 && !recognizedInSessionRef.current.has(student.id)) {
             recognizedInSessionRef.current.add(student.id);
-            const status = confidence > 0.7 ? "success" : confidence > 0.5 ? "warning" : "error";
+            const status: "success" | "warning" | "error" = "success";
             const record: AttendanceRecord = {
               id: crypto.randomUUID(),
               studentId: student.id,
