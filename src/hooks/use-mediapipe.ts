@@ -9,6 +9,14 @@ const MODEL_URL =
 // Threshold de distância cosseno para considerar "desconhecido"
 const UNKNOWN_THRESHOLD = 0.25;
 
+// ── Qualidade mínima para cadastro ──
+/** Fração mínima do frame que o rosto deve ocupar (largura ou altura) */
+const MIN_FACE_SIZE = 0.15;
+/** Rosto deve estar dentro desta margem do centro (0.5 ± margem) */
+const CENTER_MARGIN = 0.35;
+/** Variância de Laplaciano mínima para considerar imagem nítida */
+const MIN_SHARPNESS = 15;
+
 /**
  * 68 índices de landmarks chave do modelo MediaPipe Face Mesh (478 pontos).
  * Escolhidos para cobrir as principais regiões do rosto de forma discriminativa.
