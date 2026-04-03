@@ -372,7 +372,18 @@ export function useMediaPipe(): UseMediaPipeReturn {
         throw new Error("NO_FACE");
       if (result.faceLandmarks.length > 1) throw new Error("MULTIPLE_FACES");
 
-      return { descriptor: buildDescriptor(result.faceLandmarks[0]), imageBase64 };
+      // Bounding box para validação de qualidade
+      const landmarks = result.faceLandmarks[0];
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const lm of landmarks) {
+        if (lm.x < minX) minX = lm.x;
+        if (lm.y < minY) minY = lm.y;
+        if (lm.x > maxX) maxX = lm.x;
+        if (lm.y > maxY) maxY = lm.y;
+      }
+      validateFaceQuality({ x: minX, y: minY, width: maxX - minX, height: maxY - minY }, canvas);
+
+      return { descriptor: buildDescriptor(landmarks), imageBase64 };
     },
     [isLoaded]
   );
