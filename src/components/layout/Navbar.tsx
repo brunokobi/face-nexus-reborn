@@ -99,12 +99,55 @@ export function Navbar({ currentPage, onNavigate }: NavbarProps) {
               <Button variant="ghost" size="icon" onClick={toggleTheme} title={theme === "light" ? "Tema escuro" : "Tema claro"}>
                 {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
               </Button>
-              <span className="text-sm text-muted-foreground truncate max-w-[150px]">
-                {profile?.full_name || profile?.email || "Usuário"}
-              </span>
-              <Button variant="ghost" size="icon" onClick={signOut} title="Sair">
-                <LogOut className="h-4 w-4" />
-              </Button>
+              <Popover open={isProfileOpen} onOpenChange={setIsProfileOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    onClick={handleOpenProfile}
+                    className="flex items-center gap-2 rounded-full hover:ring-2 hover:ring-primary/30 transition-all cursor-pointer"
+                  >
+                    <Avatar className="h-8 w-8">
+                      <AvatarImage src={profile?.avatar_url || undefined} />
+                      <AvatarFallback className="bg-primary text-primary-foreground text-xs font-semibold">
+                        {getInitials(profile?.full_name, profile?.email)}
+                      </AvatarFallback>
+                    </Avatar>
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className="w-72" align="end">
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-3">
+                      <Avatar className="h-12 w-12">
+                        <AvatarImage src={profile?.avatar_url || undefined} />
+                        <AvatarFallback className="bg-primary text-primary-foreground text-sm font-semibold">
+                          {getInitials(profile?.full_name, profile?.email)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{profile?.full_name || "Sem nome"}</p>
+                        <p className="text-xs text-muted-foreground truncate">{profile?.email || user?.email}</p>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <div>
+                        <Label htmlFor="edit-name" className="text-xs">Nome completo</Label>
+                        <Input id="edit-name" value={editName} onChange={e => setEditName(e.target.value)} className="h-8 text-sm" />
+                      </div>
+                      <div>
+                        <Label htmlFor="edit-email" className="text-xs">Email</Label>
+                        <Input id="edit-email" value={editEmail} onChange={e => setEditEmail(e.target.value)} className="h-8 text-sm" />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" className="flex-1" onClick={handleSaveProfile} disabled={saving}>
+                        {saving ? "Salvando..." : "Salvar"}
+                      </Button>
+                      <Button size="sm" variant="ghost" className="text-destructive" onClick={signOut}>
+                        <LogOut className="h-4 w-4 mr-1" /> Sair
+                      </Button>
+                    </div>
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
           </div>
 
