@@ -11,6 +11,25 @@ export interface Student {
   totalClasses: number;
 }
 
+export interface Teacher {
+  id: string;
+  name: string;
+  email: string;
+  department: string;
+  registrationDate: Date;
+}
+
+export interface Discipline {
+  id: string;
+  code: string;
+  name: string;
+  course: string;
+  teacherId: string;
+  workloadHours: number;
+  description?: string;
+  registrationDate: Date;
+}
+
 export interface AttendanceRecord {
   id: string;
   studentId: string;
@@ -19,4 +38,8 @@ export interface AttendanceRecord {
   confidence: number;
   location: string;
   status: "success" | "warning" | "error";
+  disciplineId?: string;
+  disciplineName?: string;
+  teacherId?: string;
+  teacherName?: string;
 }

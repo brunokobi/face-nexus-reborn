@@ -17,6 +17,11 @@ const CENTER_MARGIN = 0.35;
 /** Variância de Laplaciano mínima para considerar imagem nítida */
 const MIN_SHARPNESS = 15;
 
+// ── Qualidade mínima para o scanner em tempo real (mais leniente que o cadastro) ──
+const SCANNER_MIN_FACE_SIZE = 0.08;
+const SCANNER_CENTER_MARGIN = 0.45;
+const SCANNER_MIN_SHARPNESS = 8;
+
 /**
  * 68 índices de landmarks chave do modelo MediaPipe Face Mesh (478 pontos).
  * Escolhidos para cobrir as principais regiões do rosto de forma discriminativa.
@@ -48,6 +53,11 @@ export interface FaceDetectionResult {
   /** Bounding box normalizado (0-1) relativo ao frame do vídeo */
   box: { x: number; y: number; width: number; height: number };
   descriptor: Float32Array;
+}
+
+export interface FaceQualityResult {
+  ok: boolean;
+  reason: "FACE_TOO_SMALL" | "FACE_NOT_CENTERED" | "FACE_BLURRY" | null;
 }
 
 export interface MediaPipeMatcher {
@@ -180,6 +190,7 @@ export interface UseMediaPipeReturn {
   loadError: string | null;
   detectFaces: (video: HTMLVideoElement) => Promise<FaceDetectionResult[]>;
   createMatcher: (students: Student[]) => MediaPipeMatcher | null;
+  checkFaceQuality: (box: FaceDetectionResult["box"], canvas: HTMLCanvasElement) => FaceQualityResult;
   captureDescriptor: (
     video: HTMLVideoElement
   ) => Promise<{ descriptor: Float32Array; imageBase64: string }>;
@@ -276,6 +287,14 @@ export function useMediaPipe(): UseMediaPipeReturn {
   const createMatcher = useCallback(
     (students: Student[]): MediaPipeMatcher | null => {
       const EXPECTED_DESC_SIZE = KEY_LANDMARKS.length * 3; // 204
+      const DIM = EXPECTED_DESC_SIZE;
+
+      // LSH (Locality Sensitive Hashing) para similaridade cosseno.
+      // Cada tabela usa PLANES_PER_TABLE hiperplanos aleatórios — o hash de um
+      // descriptor é a assinatura binária do lado de cada hiperplano em que ele cai.
+      // Vetores próximos colidem no mesmo bucket com alta probabilidade.
+      const NUM_TABLES = 6;        // mais tabelas → maior recall
+      const PLANES_PER_TABLE = 12; // 2^12 = 4096 buckets; cabe em um inteiro 32-bit
 
       const labeled = students
         .filter(
@@ -287,16 +306,68 @@ export function useMediaPipe(): UseMediaPipeReturn {
 
       if (labeled.length === 0) return null;
 
+      // Gerador de normal padrão via Box-Muller (necessário para projeções na hiperesfera)
+      const randn = (): number => {
+        const u1 = Math.random() || 1e-10;
+        const u2 = Math.random();
+        return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+      };
+
+      // Constrói as tabelas LSH: hiperplanos achatados em Float32Array (cache-friendly)
+      const tables = Array.from({ length: NUM_TABLES }, () => {
+        const planes = new Float32Array(PLANES_PER_TABLE * DIM);
+        for (let i = 0; i < planes.length; i++) planes[i] = randn();
+        const buckets = new Map<number, number[]>();
+        return { planes, buckets };
+      });
+
+      // Hash de PLANES_PER_TABLE bits: bit i = sinal do produto escalar com o plano i
+      const computeHash = (planes: Float32Array, desc: Float32Array): number => {
+        let hash = 0;
+        for (let p = 0; p < PLANES_PER_TABLE; p++) {
+          let dot = 0;
+          const offset = p * DIM;
+          for (let j = 0; j < DIM; j++) dot += planes[offset + j] * desc[j];
+          if (dot >= 0) hash |= (1 << p);
+        }
+        return hash;
+      };
+
+      // Indexa todos os alunos nas tabelas
+      labeled.forEach(({ descriptor }, idx) => {
+        for (const table of tables) {
+          const key = computeHash(table.planes, descriptor);
+          const bucket = table.buckets.get(key);
+          if (bucket) bucket.push(idx);
+          else table.buckets.set(key, [idx]);
+        }
+      });
+
       return {
         findBestMatch(descriptor: Float32Array) {
+          // Coleta candidatos de todas as tabelas (união dos buckets)
+          const candidateSet = new Set<number>();
+          for (const table of tables) {
+            const key = computeHash(table.planes, descriptor);
+            for (const idx of table.buckets.get(key) ?? []) {
+              candidateSet.add(idx);
+            }
+          }
+
+          // Fallback para varredura completa em datasets muito pequenos ou buckets vazios
+          const candidates: Iterable<number> =
+            candidateSet.size > 0
+              ? candidateSet
+              : labeled.map((_, i) => i);
+
           let bestLabel = "unknown";
           let bestDistance = Infinity;
 
-          for (const { id, descriptor: ref } of labeled) {
-            const dist = cosineDistance(descriptor, ref);
+          for (const idx of candidates) {
+            const dist = cosineDistance(descriptor, labeled[idx].descriptor);
             if (dist < bestDistance) {
               bestDistance = dist;
-              bestLabel = id;
+              bestLabel = labeled[idx].id;
             }
           }
 
@@ -304,6 +375,31 @@ export function useMediaPipe(): UseMediaPipeReturn {
           return { label: bestLabel, distance: bestDistance };
         },
       };
+    },
+    []
+  );
+
+  /** Verifica a qualidade de um rosto detectado no scanner em tempo real (não lança exceção). */
+  const checkFaceQuality = useCallback(
+    (
+      box: FaceDetectionResult["box"],
+      canvas: HTMLCanvasElement
+    ): FaceQualityResult => {
+      if (box.width < SCANNER_MIN_FACE_SIZE || box.height < SCANNER_MIN_FACE_SIZE)
+        return { ok: false, reason: "FACE_TOO_SMALL" };
+
+      const faceCenterX = box.x + box.width / 2;
+      const faceCenterY = box.y + box.height / 2;
+      if (
+        Math.abs(faceCenterX - 0.5) > SCANNER_CENTER_MARGIN ||
+        Math.abs(faceCenterY - 0.5) > SCANNER_CENTER_MARGIN
+      )
+        return { ok: false, reason: "FACE_NOT_CENTERED" };
+
+      if (computeSharpness(canvas, box) < SCANNER_MIN_SHARPNESS)
+        return { ok: false, reason: "FACE_BLURRY" };
+
+      return { ok: true, reason: null };
     },
     []
   );
@@ -388,5 +484,5 @@ export function useMediaPipe(): UseMediaPipeReturn {
     [isLoaded]
   );
 
-  return { isLoaded, isLoading, loadError, detectFaces, createMatcher, captureDescriptor, captureDescriptorFromFile };
+  return { isLoaded, isLoading, loadError, detectFaces, createMatcher, checkFaceQuality, captureDescriptor, captureDescriptorFromFile };
 }

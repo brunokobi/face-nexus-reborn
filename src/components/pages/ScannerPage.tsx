@@ -6,13 +6,15 @@ import { Camera, StopCircle, User, Clock, CheckCircle, AlertCircle, Loader2, Map
 import { useToast } from "@/hooks/use-toast";
 import { useMediaPipe } from "@/hooks/use-mediapipe";
 import { useCamera } from "@/hooks/use-camera";
-import { LocationModal } from "@/components/scanner/LocationModal";
+import { SessionModal, type SessionInfo } from "@/components/scanner/SessionModal";
 import { supabase } from "@/integrations/supabase/client";
-import type { Student, AttendanceRecord } from "@/types/student";
+import type { Student, AttendanceRecord, Discipline, Teacher } from "@/types/student";
 
 interface ScannerPageProps {
   students: Student[];
   attendance: AttendanceRecord[];
+  disciplines: Discipline[];
+  teachers: Teacher[];
   addAttendanceRecord: (record: AttendanceRecord) => void;
   updateStudent: (id: string, data: Partial<Student>) => void;
 }
@@ -23,11 +25,12 @@ function hasValidFaceDescriptor(student: Student) {
   return !!student.faceDescriptor && student.faceDescriptor.length === EXPECTED_DESCRIPTOR_SIZE;
 }
 
-export function ScannerPage({ students, attendance, addAttendanceRecord, updateStudent }: ScannerPageProps) {
+export function ScannerPage({ students, attendance, disciplines, teachers, addAttendanceRecord, updateStudent }: ScannerPageProps) {
   const [isScanning, setIsScanning] = useState(false);
   const [isPreparingBiometrics, setIsPreparingBiometrics] = useState(false);
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [currentLocation, setCurrentLocation] = useState("");
+  const [currentSession, setCurrentSession] = useState<SessionInfo | null>(null);
   const [sessionResults, setSessionResults] = useState<AttendanceRecord[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -35,7 +38,8 @@ export function ScannerPage({ students, attendance, addAttendanceRecord, updateS
   const isScanningRef = useRef(false);
   const recognitionStudentsRef = useRef<Student[]>(students);
   const { toast } = useToast();
-  const { isLoaded, isLoading, loadError, detectFaces, createMatcher, captureDescriptorFromFile } = useMediaPipe();
+  const { isLoaded, isLoading, loadError, detectFaces, createMatcher, checkFaceQuality, captureDescriptorFromFile } = useMediaPipe();
+  const offscreenCanvasRef = useRef<HTMLCanvasElement>(document.createElement("canvas"));
   const { startCamera, stopCamera } = useCamera();
   const recognizedInSessionRef = useRef<Set<string>>(new Set());
 
@@ -133,11 +137,13 @@ export function ScannerPage({ students, attendance, addAttendanceRecord, updateS
     }
   };
 
-  const handleLocationConfirm = async (location: string) => {
+  const handleLocationConfirm = async (session: SessionInfo) => {
     setShowLocationModal(false);
-    setCurrentLocation(location);
+    setCurrentLocation(session.location);
+    setCurrentSession(session);
     recognizedInSessionRef.current = new Set();
     setSessionResults([]);
+    const location = session.location;
 
     if (!videoRef.current) return;
     const ok = await startCamera(videoRef.current);
@@ -171,16 +177,45 @@ export function ScannerPage({ students, attendance, addAttendanceRecord, updateS
         const ctx = overlay.getContext("2d")!;
         ctx.clearRect(0, 0, vw, vh);
 
+        // Captura o frame atual para análise de qualidade (1× por iteração)
+        const offscreen = offscreenCanvasRef.current;
+        offscreen.width = vw;
+        offscreen.height = vh;
+        offscreen.getContext("2d")!.drawImage(video, 0, 0);
+
+        const QUALITY_LABELS: Record<string, string> = {
+          FACE_TOO_SMALL: "Muito longe",
+          FACE_NOT_CENTERED: "Descentralizado",
+          FACE_BLURRY: "Desfocado",
+        };
+
         for (const detection of results) {
           const { box, descriptor } = detection;
-          const bestMatch = matcher.findBestMatch(descriptor);
-          const isUnknown = bestMatch.label === "unknown";
 
           // Converter coordenadas normalizadas (0-1) para pixels
           const px = box.x * vw;
           const py = box.y * vh;
           const pw = box.width * vw;
           const ph = box.height * vh;
+
+          // Verifica qualidade antes do matching — rostos ruins são ignorados
+          const quality = checkFaceQuality(box, offscreen);
+          if (!quality.ok) {
+            ctx.strokeStyle = "hsl(38, 92%, 50%)";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(px, py, pw, ph);
+            const label = QUALITY_LABELS[quality.reason!] ?? "Qualidade baixa";
+            ctx.font = "14px sans-serif";
+            const textWidth = ctx.measureText(label).width;
+            ctx.fillStyle = "hsl(38, 92%, 50%)";
+            ctx.fillRect(px, py - 24, textWidth + 16, 24);
+            ctx.fillStyle = "#fff";
+            ctx.fillText(label, px + 8, py - 7);
+            continue;
+          }
+
+          const bestMatch = matcher.findBestMatch(descriptor);
+          const isUnknown = bestMatch.label === "unknown";
 
           // Confiança: distance 0 = 100%, threshold 0.25 = 0%
           const confidence = Math.max(0, Math.min(1, 1 - bestMatch.distance / 0.25));
@@ -205,7 +240,7 @@ export function ScannerPage({ students, attendance, addAttendanceRecord, updateS
           // Registrar presença (1x por sessão por aluno)
           if (!isUnknown && student && confidence > 0.9 && !recognizedInSessionRef.current.has(student.id)) {
             recognizedInSessionRef.current.add(student.id);
-            const status: "success" | "warning" | "error" = "success";
+            const sess = currentSession;
             const record: AttendanceRecord = {
               id: crypto.randomUUID(),
               studentId: student.id,
@@ -213,7 +248,11 @@ export function ScannerPage({ students, attendance, addAttendanceRecord, updateS
               timestamp: new Date(),
               confidence,
               location,
-              status: status as "success" | "warning" | "error",
+              status: "success",
+              disciplineId: sess?.disciplineId,
+              disciplineName: sess?.disciplineName,
+              teacherId: sess?.teacherId,
+              teacherName: sess?.teacherName,
             };
             addAttendanceRecord(record);
             setSessionResults((prev) => [record, ...prev]);
@@ -384,7 +423,7 @@ export function ScannerPage({ students, attendance, addAttendanceRecord, updateS
           </div>
         </div>
       </div>
-      <LocationModal open={showLocationModal} onConfirm={handleLocationConfirm} onCancel={() => setShowLocationModal(false)} />
+      <SessionModal open={showLocationModal} disciplines={disciplines} teachers={teachers} onConfirm={handleLocationConfirm} onCancel={() => setShowLocationModal(false)} />
     </div>
   );
 }

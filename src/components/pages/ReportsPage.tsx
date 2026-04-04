@@ -1,15 +1,26 @@
+import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, Download, TrendingUp, Users, Calendar, Clock, MapPin } from "lucide-react";
-import type { Student, AttendanceRecord } from "@/types/student";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { BarChart3, Download, TrendingUp, Users, Calendar, Clock, MapPin, BookOpen, GraduationCap } from "lucide-react";
+import type { Student, AttendanceRecord, Discipline, Teacher } from "@/types/student";
 
 interface ReportsPageProps {
   students: Student[];
   attendance: AttendanceRecord[];
+  disciplines: Discipline[];
+  teachers: Teacher[];
 }
 
-export function ReportsPage({ students, attendance }: ReportsPageProps) {
+export function ReportsPage({ students, attendance, disciplines, teachers }: ReportsPageProps) {
+  const [disciplineFilter, setDisciplineFilter] = useState("all");
+
+  // Aplica filtro de disciplina antes de calcular métricas
+  const filteredAttendance = disciplineFilter === "all"
+    ? attendance
+    : attendance.filter((r) => r.disciplineId === disciplineFilter);
+
   const totalStudents = students.length;
   const avgAttendance = totalStudents > 0
     ? Math.round(
@@ -21,32 +32,23 @@ export function ReportsPage({ students, attendance }: ReportsPageProps) {
     : 0;
 
   const todayStr = new Date().toDateString();
-  const presentToday = attendance.filter(
+  const presentToday = filteredAttendance.filter(
     (r) => new Date(r.timestamp).toDateString() === todayStr && r.status === "success"
   ).length;
 
-  // Group attendance by date (last 7 days)
-  // Group attendance by date string for efficient lookup
-  const attendanceByDate = attendance.reduce((acc, record) => {
+  const attendanceByDate = filteredAttendance.reduce((acc, record) => {
     const dateStr = new Date(record.timestamp).toDateString();
-    if (!acc[dateStr]) {
-      acc[dateStr] = [];
-    }
-    // Add only successful records to avoid filtering later
-    if (record.status === 'success') {
-      acc[dateStr].push(record.studentId);
-    }
+    if (!acc[dateStr]) acc[dateStr] = [];
+    if (record.status === "success") acc[dateStr].push(record.studentId);
     return acc;
   }, {} as Record<string, string[]>);
 
-  // Calculate stats for the last 7 days
   const last7Days: { date: string; present: number; total: number; percentage: number }[] = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i);
     const ds = d.toDateString();
-    const presentStudentIds = attendanceByDate[ds] || [];
-    const uniqueStudents = new Set(presentStudentIds);
+    const uniqueStudents = new Set(attendanceByDate[ds] ?? []);
     last7Days.push({
       date: d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }),
       present: uniqueStudents.size,
@@ -55,7 +57,6 @@ export function ReportsPage({ students, attendance }: ReportsPageProps) {
     });
   }
 
-  // Ranking by attendance
   const ranking = [...students]
     .sort((a, b) => {
       const pa = a.totalClasses > 0 ? a.presenceCount / a.totalClasses : 0;
@@ -64,10 +65,17 @@ export function ReportsPage({ students, attendance }: ReportsPageProps) {
     })
     .slice(0, 5);
 
-  // Locations summary
   const locationCounts: Record<string, number> = {};
-  attendance.forEach((r) => {
+  filteredAttendance.forEach((r) => {
     locationCounts[r.location] = (locationCounts[r.location] || 0) + 1;
+  });
+
+  // Presença por disciplina
+  const disciplineCounts: Record<string, number> = {};
+  attendance.forEach((r) => {
+    if (r.disciplineName) {
+      disciplineCounts[r.disciplineName] = (disciplineCounts[r.disciplineName] || 0) + 1;
+    }
   });
 
   const getAttendanceBadgeVariant = (pct: number) => {
@@ -84,10 +92,26 @@ export function ReportsPage({ students, attendance }: ReportsPageProps) {
             <h1 className="text-3xl lg:text-4xl font-bold">Relatórios de Presença</h1>
             <p className="text-muted-foreground text-lg">Análises e estatísticas baseadas em dados reais</p>
           </div>
-          <Button variant="outline">
-            <Download className="h-4 w-4 mr-2" />
-            Exportar Relatório
-          </Button>
+          <div className="flex gap-2 flex-wrap">
+            {disciplines.length > 0 && (
+              <Select value={disciplineFilter} onValueChange={setDisciplineFilter}>
+                <SelectTrigger className="w-56">
+                  <BookOpen className="h-4 w-4 mr-2 text-muted-foreground" />
+                  <SelectValue placeholder="Filtrar por disciplina" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas as disciplinas</SelectItem>
+                  {disciplines.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>{d.code} — {d.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <Button variant="outline">
+              <Download className="h-4 w-4 mr-2" />
+              Exportar Relatório
+            </Button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -118,7 +142,7 @@ export function ReportsPage({ students, attendance }: ReportsPageProps) {
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-accent/10 rounded-lg"><Calendar className="h-6 w-6 text-accent" /></div>
                 <div>
-                  <div className="text-2xl font-bold">{attendance.length}</div>
+                  <div className="text-2xl font-bold">{filteredAttendance.length}</div>
                   <div className="text-sm text-muted-foreground">Total Registros</div>
                 </div>
               </div>
@@ -194,6 +218,35 @@ export function ReportsPage({ students, attendance }: ReportsPageProps) {
             </CardContent>
           </Card>
         </div>
+
+        {Object.keys(disciplineCounts).length > 0 && (
+          <Card className="shadow-card">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><BookOpen className="h-5 w-5" /> Registros por Disciplina</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid md:grid-cols-3 gap-4">
+                {Object.entries(disciplineCounts).sort((a, b) => b[1] - a[1]).map(([disc, count]) => {
+                  const discipline = disciplines.find((d) => d.name === disc);
+                  const teacher = discipline ? teachers.find((t) => t.id === discipline.teacherId) : undefined;
+                  return (
+                    <div key={disc} className="flex flex-col gap-1 p-3 bg-muted/30 rounded-lg">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-sm">{disc}</span>
+                        <Badge variant="outline">{count} reg.</Badge>
+                      </div>
+                      {teacher && (
+                        <p className="text-xs text-muted-foreground flex items-center gap-1">
+                          <GraduationCap className="h-3 w-3" /> {teacher.name}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {Object.keys(locationCounts).length > 0 && (
           <Card className="shadow-card">
